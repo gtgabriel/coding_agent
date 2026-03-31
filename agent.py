@@ -9,10 +9,11 @@ import sys
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.styles import Style  # styling the prompt
+from prompt_toolkit.styles import Style
 
 from llm import OllamaClient, TextBlock, ToolUse, LLMResponse
 from tools import TOOL_DEFINITIONS, execute_tool
@@ -24,10 +25,10 @@ console = Console()
 
 MODEL = os.environ.get("QWEN_MODEL", "qwen3.5:35b-a3b")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "8192"))
+NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "16384"))
 MAX_TOKENS = int(os.environ.get("QWEN_MAX_TOKENS", "4096"))
 MAX_TURNS = int(os.environ.get("QWEN_MAX_TURNS", "20"))
-COMPACT_THRESHOLD = int(os.environ.get("QWEN_COMPACT_THRESHOLD", "20"))
+COMPACT_THRESHOLD = int(os.environ.get("QWEN_COMPACT_THRESHOLD", "40"))
 COMPACT_KEEP = int(os.environ.get("QWEN_COMPACT_KEEP", "6"))
 
 # ── Cancellation ──────────────────────────────────────────────────
@@ -183,7 +184,10 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str) -> s
                 if confirm_desc and not await _confirm(confirm_desc):
                     result = "User denied this action."
                 else:
-                    result = await execute_tool(block.name, block.input)
+                    try:
+                        result = await execute_tool(block.name, block.input)
+                    except Exception as e:
+                        result = f"Tool error: {e}"
 
                 preview = result[:200] + "..." if len(result) > 200 else result
                 for line in preview.splitlines()[:5]:
@@ -242,6 +246,35 @@ def _format_tool_args(name: str, args: dict) -> str:
     return str(args)[:80]
 
 
+# ── Help ──────────────────────────────────────────────────────────
+
+
+def _show_help():
+    console.print()
+    console.print("[bold]Commands[/]")
+    console.print("  [green]help[/], [green]/help[/]    Show this help")
+    console.print("  [green]clear[/]           Reset conversation history")
+    console.print("  [green]exit[/], [green]quit[/], [green]q[/]  Exit the agent")
+    console.print("  [green]Ctrl+C[/]          Cancel a running request")
+    console.print()
+    console.print("[bold]Tools available[/]")
+    console.print("  [purple]bash[/]            Run shell commands (git, tests, builds)")
+    console.print("  [purple]read_file[/]       Read file contents with line numbers")
+    console.print("  [purple]write_file[/]      Create or overwrite files [dim](confirms)[/]")
+    console.print("  [purple]edit_file[/]       Find-and-replace in files [dim](confirms)[/]")
+    console.print("  [purple]list_files[/]      Glob pattern file search")
+    console.print("  [purple]web_search[/]      Search the web via DuckDuckGo")
+    console.print("  [purple]browse_url[/]      Fetch and read a web page")
+    console.print("  [purple]analyze_image[/]   Describe a screenshot or image")
+    console.print()
+    console.print("[bold]Configuration[/] [dim](env vars)[/]")
+    console.print(f"  QWEN_MODEL          [dim]{MODEL}[/]")
+    console.print(f"  QWEN_NUM_CTX        [dim]{NUM_CTX}[/]")
+    console.print(f"  QWEN_MAX_TOKENS     [dim]{MAX_TOKENS}[/]")
+    console.print(f"  QWEN_MAX_TURNS      [dim]{MAX_TURNS}[/]")
+    console.print()
+
+
 # ── REPL ───────────────────────────────────────────────────────────
 
 
@@ -284,12 +317,13 @@ async def main():
 
     while True:
         try:
+            console.print(Rule(style="blue"))
             user_input = await asyncio.to_thread(session.prompt, "Human: ", multiline=False)
         except EOFError:
             console.print("\n[dim]Bye![/]")
             break
         except KeyboardInterrupt:
-            continue  # Ctrl+C at prompt just resets the input line
+            continue
 
         user_input = user_input.strip()
         if not user_input:
@@ -300,6 +334,9 @@ async def main():
         if user_input.lower() == "clear":
             messages.clear()
             console.print("[dim]Conversation cleared.[/]")
+            continue
+        if user_input.lower() in ("help", "/help"):
+            _show_help()
             continue
 
         # Run agent — Ctrl+C here cancels the task, not the app
