@@ -44,12 +44,6 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop):
             _active_task.cancel()
     loop.add_signal_handler(signal.SIGINT, sigint_handler)
 
-    def sigwinch_handler():
-        # Clear the screen and reposition cursor on resize
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.flush()
-        console.print("[dim]Terminal resized. Output cleared.[/]\n")
-    loop.add_signal_handler(signal.SIGWINCH, sigwinch_handler)
 
 
 # ── Compaction ─────────────────────────────────────────────────────
@@ -148,9 +142,10 @@ async def _confirm(description: str) -> bool:
 # ── Agent loop ─────────────────────────────────────────────────────
 
 
-async def agent_loop(client: OllamaClient, messages: list, user_input: str) -> str:
-    """Run the agentic tool-use loop for a single user message. Returns final text."""
+async def agent_loop(client: OllamaClient, messages: list, user_input: str) -> tuple[str, int]:
+    """Run the agentic tool-use loop. Returns (final_text, last_prompt_tokens)."""
     messages.append({"role": "user", "content": user_input})
+    last_tokens = 0
 
     for turn in range(MAX_TURNS):
         with console.status(
@@ -163,10 +158,12 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str) -> s
                 tools=TOOL_DEFINITIONS,
             )
 
+        last_tokens = response.prompt_tokens
+
         if response.stop_reason == "end_turn":
             text = "\n".join(b.text for b in response.content if isinstance(b, TextBlock))
             messages.append({"role": "assistant", "content": text})
-            return text
+            return text, last_tokens
 
         tool_results = []
         for block in response.content:
@@ -202,12 +199,12 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str) -> s
         if not tool_results:
             text = "\n".join(b.text for b in response.content if isinstance(b, TextBlock))
             messages.append({"role": "assistant", "content": text})
-            return text
+            return text, last_tokens
 
         messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results})
 
-    return "Error: max turns reached."
+    return "Error: max turns reached.", last_tokens
 
 
 def _cleanup_messages(messages: list, user_input: str):
@@ -302,28 +299,35 @@ async def main():
     )
 
     messages = []
+    last_prompt_tokens = 0
 
     history_path = os.path.expanduser("~/.qwen-agent-history")
-    
-    # Create a style that makes everything yellow
+
     yellow_style = Style.from_dict({
-        '': 'ansiyellow', 
+        '': 'ansiyellow',
     })
-
-    # Now update this line to include the style
     session = PromptSession(history=FileHistory(history_path), style=yellow_style)
-
-    # session = PromptSession(history=FileHistory(history_path))
 
     while True:
         try:
             console.print(Rule(style="blue"))
             user_input = await asyncio.to_thread(session.prompt, "Human: ", multiline=False)
+            console.print(Rule(style="blue"))
         except EOFError:
             console.print("\n[dim]Bye![/]")
             break
         except KeyboardInterrupt:
             continue
+
+        # Token/message status line
+        compact_in = max(0, COMPACT_THRESHOLD - len(messages))
+        if last_prompt_tokens > 0:
+            console.print(
+                f"[dim]ctx: {last_prompt_tokens:,} / {NUM_CTX:,} tokens "
+                f"· {len(messages)} msgs · compact in {compact_in}[/]"
+            )
+        else:
+            console.print(f"[dim]{len(messages)} msgs · compact in {compact_in}[/]")
 
         user_input = user_input.strip()
         if not user_input:
@@ -333,6 +337,7 @@ async def main():
             break
         if user_input.lower() == "clear":
             messages.clear()
+            last_prompt_tokens = 0
             console.print("[dim]Conversation cleared.[/]")
             continue
         if user_input.lower() in ("help", "/help"):
@@ -344,7 +349,7 @@ async def main():
 
         _active_task = asyncio.current_task()
         try:
-            result = await agent_loop(client, messages, user_input)
+            result, last_prompt_tokens = await agent_loop(client, messages, user_input)
             if result:
                 console.print()
                 console.print(Markdown(result))

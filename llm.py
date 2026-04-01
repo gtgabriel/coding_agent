@@ -22,6 +22,8 @@ class LLMResponse:
     """Normalized response from Ollama."""
     stop_reason: str   # "end_turn" or "tool_use"
     content: list      # list of TextBlock and/or ToolUse
+    prompt_tokens: int = 0   # tokens used by the prompt
+    output_tokens: int = 0   # tokens generated in response
 
 
 class OllamaClient:
@@ -161,4 +163,9 @@ class OllamaClient:
                 ))
 
         stop_reason = "tool_use" if msg.get("tool_calls") else "end_turn"
-        return LLMResponse(stop_reason=stop_reason, content=content)
+        return LLMResponse(
+            stop_reason=stop_reason,
+            content=content,
+            prompt_tokens=data.get("prompt_eval_count", 0),
+            output_tokens=data.get("eval_count", 0),
+        )
