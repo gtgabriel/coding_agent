@@ -114,7 +114,6 @@ class OllamaClient:
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
-            "think": False,
             "options": {
                 "num_ctx": self.num_ctx,
                 "num_predict": self.max_tokens,
@@ -163,7 +162,10 @@ class OllamaClient:
         import re, os
         if os.environ.get("QWEN_DEBUG"):
             import sys
-            print(f"\n[DEBUG] keys={list(msg.keys())} tool_calls={bool(msg.get('tool_calls'))} content_len={len(msg.get('content') or '')} thinking_len={len(msg.get('thinking') or '')}", file=sys.stderr, flush=True)
+            print(f"\n[DEBUG] msg_keys={list(msg.keys())} tool_calls={bool(msg.get('tool_calls'))} content_len={len(msg.get('content') or '')} thinking_len={len(msg.get('thinking') or '')} eval_count={data.get('eval_count')} done_reason={data.get('done_reason')}", file=sys.stderr, flush=True)
+            if os.environ.get("QWEN_DEBUG") == "2":
+                print(f"[DEBUG2] full_data={json.dumps({k: v for k, v in data.items() if k != 'message'})}", file=sys.stderr, flush=True)
+                print(f"[DEBUG2] full_msg={json.dumps(msg)}", file=sys.stderr, flush=True)
         # Ollama 0.20.0+ may separate thinking into its own field.
         # If so, msg["content"] is already clean — just use it directly.
         # If not, strip embedded thinking tags from content.
