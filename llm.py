@@ -159,11 +159,13 @@ class OllamaClient:
         content = []
 
         if msg.get("content"):
-            # Strip thinking tags if present
             text = msg["content"]
-            # Remove <think>...</think> blocks from output
             import re
-            text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+            # Qwen: <think>...</think>
+            text = re.sub(r"<think>[\s\S]*?</think>", "", text)
+            # Gemma 4: <|channel>thought ... <channel|>
+            text = re.sub(r"<\|channel>thought[\s\S]*?<channel\|>", "", text)
+            text = text.strip()
             if text:
                 content.append(TextBlock(text=text))
 
