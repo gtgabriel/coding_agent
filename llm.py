@@ -122,10 +122,12 @@ class OllamaClient:
         if ollama_tools:
             payload["tools"] = ollama_tools
 
+        body = json.dumps(payload).encode()
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self.host}/api/chat",
-                json=payload,
+                data=body,
+                headers={"Content-Type": "application/json"},
                 timeout=aiohttp.ClientTimeout(total=300),
             ) as resp:
                 raw = await resp.read()
@@ -136,10 +138,12 @@ class OllamaClient:
             # Retry without tools if model doesn't support them
             if "does not support tools" in err and ollama_tools:
                 payload.pop("tools", None)
+                body = json.dumps(payload).encode()
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         f"{self.host}/api/chat",
-                        json=payload,
+                        data=body,
+                        headers={"Content-Type": "application/json"},
                         timeout=aiohttp.ClientTimeout(total=300),
                     ) as resp:
                         raw = await resp.read()
