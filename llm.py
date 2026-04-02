@@ -85,6 +85,7 @@ class OllamaClient:
                         text_parts.append(item.text)
                     elif isinstance(item, ToolUse):
                         tool_calls.append({
+                            "id": item.id,
                             "function": {
                                 "name": item.name,
                                 "arguments": item.input,
@@ -187,7 +188,7 @@ class OllamaClient:
                     except json.JSONDecodeError:
                         args = {"raw": args}
                 content.append(ToolUse(
-                    id=f"call_{fn['name']}",
+                    id=tc.get("id") or f"call_{fn['name']}",
                     name=fn["name"],
                     input=args,
                 ))
