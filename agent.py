@@ -382,7 +382,8 @@ def _show_help():
     console.print("  [green]/pwd[/]             Show current working directory")
     console.print("  [green]/cd[/] [dim]<path>[/]      Change working directory")
     console.print("  [green]/cat[/] [dim]<file>[/]     Print file contents")
-    console.print("  [green]/model[/]           Show current model info")
+    console.print("  [green]/model[/]            Pick a model [dim](shows installed list)[/]")
+    console.print("  [green]/model[/] [dim]<name>[/]    Switch to a specific model directly")
     console.print("  [green]/compact[/]         Force conversation compaction now")
     console.print("  [green]/ps[/]              List background processes")
     console.print("  [green]/kill[/] [dim]<pid>[/]     Kill a background process")
@@ -452,13 +453,7 @@ async def _handle_slash(user_input: str) -> bool:
                 console.print(f"[red]{e}[/]")
         return True
 
-    if cmd == "/model":
-        console.print(f"  Model:      [cyan]{MODEL}[/]")
-        console.print(f"  Context:    [cyan]{NUM_CTX:,}[/] tokens")
-        console.print(f"  Max output: [cyan]{MAX_TOKENS:,}[/] tokens")
-        console.print(f"  Max turns:  [cyan]{MAX_TURNS}[/]")
-        console.print(f"  Ollama:     [cyan]{OLLAMA_HOST}[/]")
-        return True
+    # /model is handled separately in _handle_slash after this block
 
     if cmd == "/compact":
         return "compact"  # special signal handled in REPL loop
@@ -500,17 +495,76 @@ async def _handle_slash(user_input: str) -> bool:
     if cmd == "/execute":
         return "plan_off"
 
+    if cmd == "/model":
+        if arg:
+            return f"switch_model:{arg}"
+        # No arg — show picker
+        chosen = await _model_picker(current=MODEL)
+        if chosen:
+            return f"switch_model:{chosen}"
+        return True
+
     return False  # not a known slash command — pass to LLM
+
+
+# ── Model picker ─────────────────────────────────────────────────
+
+
+async def fetch_models() -> list[str]:
+    """Return list of model names from Ollama."""
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{OLLAMA_HOST}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                data = await resp.json()
+        return sorted(m["name"] for m in data.get("models", []))
+    except Exception:
+        return []
+
+
+async def _model_picker(current: str) -> str | None:
+    """Show a numbered list of installed models. Returns chosen name or None."""
+    models = await fetch_models()
+    if not models:
+        console.print("[red]Could not reach Ollama — is it running?[/]")
+        return None
+
+    console.print()
+    console.print("[bold]Installed models[/]")
+    for i, name in enumerate(models, 1):
+        marker = " [bold green]◀ current[/]" if name == current else ""
+        console.print(f"  [cyan]{i}[/]  {name}{marker}")
+    console.print()
+    console.print(f"  [dim]Enter number to switch, or press Enter to keep [cyan]{current}[/][/]")
+
+    try:
+        choice = await asyncio.to_thread(input, "  > ")
+        choice = choice.strip()
+        if not choice:
+            return None
+        idx = int(choice) - 1
+        if 0 <= idx < len(models):
+            return models[idx]
+        console.print("[red]Invalid choice.[/]")
+        return None
+    except (ValueError, EOFError, KeyboardInterrupt):
+        return None
 
 
 # ── REPL ───────────────────────────────────────────────────────────
 
 
 async def main():
-    global _active_task, _plan_mode
+    global _active_task, _plan_mode, MODEL
 
     loop = asyncio.get_running_loop()
     _install_signal_handlers(loop)
+
+    # Model picker on startup (skip if QWEN_MODEL env var is explicitly set)
+    if not os.environ.get("QWEN_MODEL"):
+        chosen = await _model_picker(current=MODEL)
+        if chosen:
+            MODEL = chosen
 
     console.print(
         Panel(
@@ -561,13 +615,14 @@ async def main():
             compact_in = max(0, COMPACT_THRESHOLD - len(messages))
             bg = _bg_status()
             plan_indicator = " · [bold green]PLAN MODE[/]" if _plan_mode else ""
+            model_short = MODEL.split(":")[0] if ":" in MODEL else MODEL
             if last_prompt_tokens > 0:
                 status = (
-                    f"[dim]ctx: {last_prompt_tokens:,} / {NUM_CTX:,} "
+                    f"[dim]{model_short} · ctx: {last_prompt_tokens:,} / {NUM_CTX:,} "
                     f"· {len(messages)} msgs · compact in {compact_in}{bg}[/]{plan_indicator}"
                 )
             else:
-                status = f"[dim]{len(messages)} msgs · compact in {compact_in}{bg}[/]{plan_indicator}"
+                status = f"[dim]{model_short} · {len(messages)} msgs · compact in {compact_in}{bg}[/]{plan_indicator}"
 
             console.print()
             console.print(status)
@@ -612,6 +667,14 @@ async def main():
             if handled == "plan_off":
                 _plan_mode = False
                 console.print("[dim]Plan mode OFF — back to normal.[/]")
+                continue
+            if isinstance(handled, str) and handled.startswith("switch_model:"):
+                new_model = handled.split(":", 1)[1].strip()
+                MODEL = new_model
+                client.model = new_model
+                messages.clear()
+                last_prompt_tokens = 0
+                console.print(f"[bold green]Switched to [cyan]{new_model}[/]. Conversation cleared.[/]")
                 continue
             if handled:
                 continue
