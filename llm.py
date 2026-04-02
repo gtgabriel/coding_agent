@@ -128,7 +128,8 @@ class OllamaClient:
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=300),
             ) as resp:
-                data = await resp.json()
+                raw = await resp.read()
+                data = json.loads(raw)
 
         if "error" in data:
             err = data["error"]
@@ -141,7 +142,8 @@ class OllamaClient:
                         json=payload,
                         timeout=aiohttp.ClientTimeout(total=300),
                     ) as resp:
-                        data = await resp.json()
+                        raw = await resp.read()
+                        data = json.loads(raw)
                 if "error" not in data:
                     # Fall through to normal response parsing below
                     pass
