@@ -158,18 +158,24 @@ class OllamaClient:
         msg = data.get("message", {})
         content = []
 
-        if msg.get("content"):
-            text = msg["content"]
-            import re
+        import re
+        # Ollama 0.20.0+ may separate thinking into its own field.
+        # If so, msg["content"] is already clean — just use it directly.
+        # If not, strip embedded thinking tags from content.
+        has_separate_thinking = "thinking" in msg
+        text = msg.get("content") or ""
+
+        if not has_separate_thinking:
             # Qwen: <think>...</think>
             text = re.sub(r"<think>[\s\S]*?</think>", "", text)
             # Gemma 4: <|channel>...<channel|> (closed or unclosed)
             text = re.sub(r"<\|channel>[\s\S]*?<channel\|>", "", text)
             text = re.sub(r"<\|channel>[\s\S]*", "", text)  # unclosed
             text = re.sub(r"<channel\|>", "", text)  # stray closing tag
-            text = text.strip()
-            if text:
-                content.append(TextBlock(text=text))
+
+        text = text.strip()
+        if text:
+            content.append(TextBlock(text=text))
 
         if msg.get("tool_calls"):
             for tc in msg["tool_calls"]:
