@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.syntax import Syntax
 from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -205,6 +206,27 @@ def _read_single_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
+def _preview_tool(name: str, args: dict):
+    """Print a preview of write_file or edit_file content before confirmation."""
+    if name == "write_file":
+        path = args.get("path", "")
+        content = args.get("content", "")
+        ext = os.path.splitext(path)[1].lstrip(".") or "text"
+        lines = content.splitlines()
+        preview = "\n".join(lines[:40])
+        if len(lines) > 40:
+            preview += f"\n[dim]... {len(lines) - 40} more lines[/]"
+        console.print(Syntax(preview, ext, theme="monokai", line_numbers=True))
+
+    elif name == "edit_file":
+        old = args.get("old_string", "")
+        new = args.get("new_string", "")
+        for line in old.splitlines():
+            console.print(Text(f"  - {line}", style="red"))
+        for line in new.splitlines():
+            console.print(Text(f"  + {line}", style="green"))
+
+
 async def _confirm(description: str, can_background: bool = False) -> str:
     """Ask user to confirm. Returns 'yes', 'bg', or 'no'. Single keypress."""
     if can_background:
@@ -282,6 +304,8 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                     confirm_info = _needs_confirmation(block.name, block.input)
                     if confirm_info:
                         desc, can_bg = confirm_info
+                        if block.name in ("write_file", "edit_file"):
+                            _preview_tool(block.name, block.input)
                         choice = await _confirm(desc, can_bg)
                         if choice == "no":
                             result = "User denied this action."
