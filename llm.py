@@ -163,8 +163,10 @@ class OllamaClient:
             import re
             # Qwen: <think>...</think>
             text = re.sub(r"<think>[\s\S]*?</think>", "", text)
-            # Gemma 4: <|channel>...<channel|>
+            # Gemma 4: <|channel>...<channel|> (closed or unclosed)
             text = re.sub(r"<\|channel>[\s\S]*?<channel\|>", "", text)
+            text = re.sub(r"<\|channel>[\s\S]*", "", text)  # unclosed
+            text = re.sub(r"<channel\|>", "", text)  # stray closing tag
             text = text.strip()
             if text:
                 content.append(TextBlock(text=text))
