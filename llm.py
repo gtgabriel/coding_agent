@@ -163,8 +163,8 @@ class OllamaClient:
             import re
             # Qwen: <think>...</think>
             text = re.sub(r"<think>[\s\S]*?</think>", "", text)
-            # Gemma 4: <|channel>thought ... <channel|>
-            text = re.sub(r"<\|channel>thought[\s\S]*?<channel\|>", "", text)
+            # Gemma 4: <|channel>...<channel|>
+            text = re.sub(r"<\|channel>[\s\S]*?<channel\|>", "", text)
             text = text.strip()
             if text:
                 content.append(TextBlock(text=text))
