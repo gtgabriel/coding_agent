@@ -79,7 +79,7 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "16384"))
 MAX_TOKENS = int(os.environ.get("QWEN_MAX_TOKENS", "4096"))
 MAX_TURNS = int(os.environ.get("QWEN_MAX_TURNS", "30"))
-COMPACT_THRESHOLD = int(os.environ.get("QWEN_COMPACT_THRESHOLD", "50"))
+COMPACT_THRESHOLD = int(os.environ.get("QWEN_COMPACT_THRESHOLD", "80"))
 COMPACT_KEEP = int(os.environ.get("QWEN_COMPACT_KEEP", "6"))
 
 # ── Cancellation ──────────────────────────────────────────────────
