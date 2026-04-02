@@ -126,9 +126,17 @@ class OllamaClient:
 
         def _do_request(p):
             body = json.dumps(p).encode()
+            import os
+            if os.environ.get("QWEN_DEBUG"):
+                with open("/tmp/qa_payload.json", "wb") as f:
+                    f.write(body)
             req = Request(f"{self.host}/api/chat", data=body, headers={"Content-Type": "application/json"})
             with urlopen(req, timeout=300) as resp:
-                return json.loads(resp.read())
+                raw = resp.read()
+                if os.environ.get("QWEN_DEBUG"):
+                    with open("/tmp/qa_response.json", "wb") as f:
+                        f.write(raw)
+                return json.loads(raw)
 
         data = await asyncio.to_thread(_do_request, payload)
 
