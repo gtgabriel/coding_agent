@@ -130,10 +130,30 @@ class OllamaClient:
                 data = await resp.json()
 
         if "error" in data:
-            return LLMResponse(
-                stop_reason="end_turn",
-                content=[TextBlock(text=f"Ollama error: {data['error']}")],
-            )
+            err = data["error"]
+            # Retry without tools if model doesn't support them
+            if "does not support tools" in err and ollama_tools:
+                payload.pop("tools", None)
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self.host}/api/chat",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=300),
+                    ) as resp:
+                        data = await resp.json()
+                if "error" not in data:
+                    # Fall through to normal response parsing below
+                    pass
+                else:
+                    return LLMResponse(
+                        stop_reason="end_turn",
+                        content=[TextBlock(text=f"Ollama error: {data['error']}")],
+                    )
+            else:
+                return LLMResponse(
+                    stop_reason="end_turn",
+                    content=[TextBlock(text=f"Ollama error: {err}")],
+                )
 
         msg = data.get("message", {})
         content = []
