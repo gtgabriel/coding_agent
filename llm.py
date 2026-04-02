@@ -114,6 +114,7 @@ class OllamaClient:
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
+            "think": False,
             "options": {
                 "num_ctx": self.num_ctx,
                 "num_predict": self.max_tokens,
@@ -159,7 +160,10 @@ class OllamaClient:
         msg = data.get("message", {})
         content = []
 
-        import re
+        import re, os
+        if os.environ.get("QWEN_DEBUG"):
+            import sys
+            print(f"\n[DEBUG] keys={list(msg.keys())} tool_calls={bool(msg.get('tool_calls'))} content_len={len(msg.get('content') or '')} thinking_len={len(msg.get('thinking') or '')}", file=sys.stderr, flush=True)
         # Ollama 0.20.0+ may separate thinking into its own field.
         # If so, msg["content"] is already clean — just use it directly.
         # If not, strip embedded thinking tags from content.
