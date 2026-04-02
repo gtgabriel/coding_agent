@@ -409,6 +409,7 @@ def _show_help():
     console.print("  [green]/model[/]            Pick a model [dim](shows installed list)[/]")
     console.print("  [green]/model[/] [dim]<name>[/]    Switch to a specific model directly")
     console.print("  [green]/compact[/]         Force conversation compaction now")
+    console.print("  [green]/save[/] [dim]<file>[/]    Save last response to a file")
     console.print("  [green]/ps[/]              List background processes")
     console.print("  [green]/kill[/] [dim]<pid>[/]     Kill a background process")
     console.print()
@@ -512,6 +513,9 @@ async def _handle_slash(user_input: str) -> bool:
             except ValueError:
                 console.print("[red]Usage: /kill <pid>[/]")
         return True
+
+    if cmd == "/save":
+        return f"save:{arg}"
 
     if cmd == "/plan":
         return "plan_on"
@@ -683,6 +687,26 @@ async def main():
                     console.print("[dim]Not enough history to compact.[/]")
                 else:
                     messages[:] = await compact_history(client, messages, force=True)
+                continue
+            if isinstance(handled, str) and handled.startswith("save:"):
+                filename = handled.split(":", 1)[1].strip()
+                if not filename:
+                    console.print("[red]Usage: /save <filename>[/]")
+                else:
+                    # Find last assistant message
+                    last_response = None
+                    for msg in reversed(messages):
+                        if msg["role"] == "assistant" and isinstance(msg.get("content"), str) and msg["content"]:
+                            last_response = msg["content"]
+                            break
+                    if last_response:
+                        path = os.path.expanduser(filename)
+                        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                        with open(path, "w") as f:
+                            f.write(last_response)
+                        console.print(f"[dim]Saved to {path}[/]")
+                    else:
+                        console.print("[red]No assistant response to save.[/]")
                 continue
             if handled == "plan_on":
                 _plan_mode = True
