@@ -1,8 +1,10 @@
 """Ollama backend — thin wrapper around native /api/chat with tool support."""
 
+import asyncio
 import json
 import aiohttp
 from dataclasses import dataclass
+from urllib.request import urlopen, Request
 
 
 @dataclass
@@ -122,32 +124,20 @@ class OllamaClient:
         if ollama_tools:
             payload["tools"] = ollama_tools
 
-        body = json.dumps(payload).encode()
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.host}/api/chat",
-                data=body,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=300),
-            ) as resp:
-                raw = await resp.read()
-                data = json.loads(raw)
+        def _do_request(p):
+            body = json.dumps(p).encode()
+            req = Request(f"{self.host}/api/chat", data=body, headers={"Content-Type": "application/json"})
+            with urlopen(req, timeout=300) as resp:
+                return json.loads(resp.read())
+
+        data = await asyncio.to_thread(_do_request, payload)
 
         if "error" in data:
             err = data["error"]
             # Retry without tools if model doesn't support them
             if "does not support tools" in err and ollama_tools:
                 payload.pop("tools", None)
-                body = json.dumps(payload).encode()
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        f"{self.host}/api/chat",
-                        data=body,
-                        headers={"Content-Type": "application/json"},
-                        timeout=aiohttp.ClientTimeout(total=300),
-                    ) as resp:
-                        raw = await resp.read()
-                        data = json.loads(raw)
+                data = await asyncio.to_thread(_do_request, payload)
                 if "error" not in data:
                     # Fall through to normal response parsing below
                     pass
