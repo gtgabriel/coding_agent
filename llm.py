@@ -126,17 +126,9 @@ class OllamaClient:
 
         def _do_request(p):
             body = json.dumps(p).encode()
-            import os
-            if os.environ.get("QWEN_DEBUG"):
-                with open("/tmp/qa_payload.json", "wb") as f:
-                    f.write(body)
             req = Request(f"{self.host}/api/chat", data=body, headers={"Content-Type": "application/json"})
             with urlopen(req, timeout=300) as resp:
-                raw = resp.read()
-                if os.environ.get("QWEN_DEBUG"):
-                    with open("/tmp/qa_response.json", "wb") as f:
-                        f.write(raw)
-                return json.loads(raw)
+                return json.loads(resp.read())
 
         data = await asyncio.to_thread(_do_request, payload)
 
@@ -163,16 +155,7 @@ class OllamaClient:
         msg = data.get("message", {})
         content = []
 
-        import re, os
-        if os.environ.get("QWEN_DEBUG"):
-            import sys
-            print(f"\n[DEBUG] msg_keys={list(msg.keys())} tool_calls={bool(msg.get('tool_calls'))} content_len={len(msg.get('content') or '')} thinking_len={len(msg.get('thinking') or '')} eval_count={data.get('eval_count')} done_reason={data.get('done_reason')}", file=sys.stderr, flush=True)
-            if os.environ.get("QWEN_DEBUG") == "2":
-                print(f"[DEBUG2] full_data={json.dumps({k: v for k, v in data.items() if k != 'message'})}", file=sys.stderr, flush=True)
-                print(f"[DEBUG2] full_msg={json.dumps(msg)}", file=sys.stderr, flush=True)
-            if os.environ.get("QWEN_DEBUG") == "3":
-                print(f"[DEBUG3] payload_tools={json.dumps(payload.get('tools',[]))[:300]}", file=sys.stderr, flush=True)
-                print(f"[DEBUG3] payload_msgs={json.dumps(payload.get('messages',[]))[:300]}", file=sys.stderr, flush=True)
+        import re
         # Ollama 0.20.0+ may separate thinking into its own field.
         # If so, msg["content"] is already clean — just use it directly.
         # If not, strip embedded thinking tags from content.
