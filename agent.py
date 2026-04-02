@@ -4,7 +4,9 @@
 import asyncio
 import os
 import signal
+import subprocess
 import sys
+import time
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -13,13 +15,61 @@ from rich.rule import Rule
 from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
 
 from llm import OllamaClient, TextBlock, ToolUse, LLMResponse
 from tools import TOOL_DEFINITIONS, execute_tool
 from prompts import SYSTEM_PROMPT
 
+# ── Plan mode ─────────────────────────────────────────────────────
+
+_plan_mode = False
+
+# Tools allowed in plan mode (read-only — no write_file or edit_file)
+PLAN_TOOLS = [t for t in TOOL_DEFINITIONS if t["name"] not in ("write_file", "edit_file")]
+
+PLAN_SYSTEM_ADDENDUM = """
+
+--- PLAN MODE ---
+You are in plan mode. Your job is to explore and understand, not to implement yet.
+- Do NOT create, modify, or delete any files.
+- Use read_file, list_files, bash (read-only commands: ls, cat, grep, find), web_search, and browse_url to gather context.
+- Ask the user clarifying questions if anything is unclear.
+- When ready, present a clear numbered implementation plan.
+- The user will type /execute when they are ready to proceed.
+"""
+
 console = Console()
+
+# ── Background process tracker ────────────────────────────────────
+
+_bg_processes: list[dict] = []  # [{pid, cmd, proc, started}]
+
+
+def _track_bg(proc: subprocess.Popen, cmd: str):
+    _bg_processes.append({
+        "pid": proc.pid,
+        "cmd": cmd[:60],
+        "proc": proc,
+        "started": time.time(),
+    })
+
+
+def _reap_bg():
+    """Remove finished processes from the tracker."""
+    for p in _bg_processes[:]:
+        if p["proc"].poll() is not None:
+            _bg_processes.remove(p)
+
+
+def _bg_status() -> str:
+    """Return a short status string for background processes."""
+    _reap_bg()
+    if not _bg_processes:
+        return ""
+    names = ", ".join(p["cmd"][:25] for p in _bg_processes)
+    return f" · [magenta]{len(_bg_processes)} bg[/] ({names})"
 
 # ── Config ─────────────────────────────────────────────────────────
 
@@ -27,7 +77,7 @@ MODEL = os.environ.get("QWEN_MODEL", "qwen3.5:35b-a3b")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "16384"))
 MAX_TOKENS = int(os.environ.get("QWEN_MAX_TOKENS", "4096"))
-MAX_TURNS = int(os.environ.get("QWEN_MAX_TURNS", "20"))
+MAX_TURNS = int(os.environ.get("QWEN_MAX_TURNS", "30"))
 COMPACT_THRESHOLD = int(os.environ.get("QWEN_COMPACT_THRESHOLD", "40"))
 COMPACT_KEEP = int(os.environ.get("QWEN_COMPACT_KEEP", "6"))
 
@@ -49,9 +99,9 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop):
 # ── Compaction ─────────────────────────────────────────────────────
 
 
-async def compact_history(client: OllamaClient, messages: list) -> list:
+async def compact_history(client: OllamaClient, messages: list, force: bool = False) -> list:
     """Summarize older messages, keep recent ones intact. Returns new message list."""
-    if len(messages) <= COMPACT_THRESHOLD:
+    if not force and len(messages) <= COMPACT_THRESHOLD:
         return messages
 
     old = messages[:-COMPACT_KEEP]
@@ -112,40 +162,80 @@ _DANGEROUS_PREFIXES = (
     "dd ", "> ", ">> ",
 )
 
+# Commands that need confirmation and can optionally run in background
+_RUN_PREFIXES = (
+    "pip install", "pip3 install", "npm install", "yarn add", "brew install",
+    "python ", "python3 ", "node ", "deno ", "bun run",
+    "flask run", "uvicorn ", "gunicorn ", "django", "manage.py",
+    "npm start", "npm run", "yarn start", "yarn dev",
+    "cargo run", "go run", "java ", "ruby ", "php ",
+    "docker ", "docker-compose", "make ",
+)
 
-def _needs_confirmation(tool_name: str, args: dict) -> str | None:
-    """Return a description if this tool call needs user confirmation, else None."""
+
+def _needs_confirmation(tool_name: str, args: dict) -> tuple[str, bool] | None:
+    """Return (description, can_background) if confirmation needed, else None."""
     if tool_name == "write_file":
-        return f"Write to [cyan]{args.get('path', '?')}[/]"
+        return f"Write to [cyan]{args.get('path', '?')}[/]", False
     if tool_name == "edit_file":
-        return f"Edit [cyan]{args.get('path', '?')}[/]"
+        return f"Edit [cyan]{args.get('path', '?')}[/]", False
     if tool_name == "bash":
         cmd = args.get("command", "")
+        stripped = cmd.strip()
+        # Check run commands first (can background)
+        for prefix in _RUN_PREFIXES:
+            if stripped.startswith(prefix) or f"&& {prefix}" in cmd or f"; {prefix}" in cmd:
+                return f"Run: [yellow]{cmd}[/]", True
+        # Then dangerous commands (no background option)
         for prefix in _DANGEROUS_PREFIXES:
-            if cmd.strip().startswith(prefix) or f"&& {prefix}" in cmd or f"; {prefix}" in cmd:
-                return f"Run: [yellow]{cmd}[/]"
+            if stripped.startswith(prefix) or f"&& {prefix}" in cmd or f"; {prefix}" in cmd:
+                return f"Run: [yellow]{cmd}[/]", False
     return None
 
 
-async def _confirm(description: str) -> bool:
-    """Ask the user to confirm a tool action. Returns True if approved."""
-    console.print(f"  [bold yellow]?[/] {description}")
+def _read_single_key() -> str:
+    """Read a single keypress without waiting for Enter."""
+    import termios, tty
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
     try:
-        answer = await asyncio.to_thread(
-            input, "    Allow? [y/N] "
-        )
-        return answer.strip().lower() in ("y", "yes")
+        tty.setcbreak(fd)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+async def _confirm(description: str, can_background: bool = False) -> str:
+    """Ask user to confirm. Returns 'yes', 'bg', or 'no'. Single keypress."""
+    if can_background:
+        console.print(f"  [bold yellow]?[/] {description} [dim](y/b/n)[/] ", end="")
+    else:
+        console.print(f"  [bold yellow]?[/] {description} [dim](y/n)[/] ", end="")
+    try:
+        key = await asyncio.to_thread(_read_single_key)
+        if key.lower() in ("y", "1"):
+            console.print("[green]yes[/]")
+            return "yes"
+        if can_background and key.lower() in ("b", "2"):
+            console.print("[magenta]background[/]")
+            return "bg"
+        console.print("[red]no[/]")
+        return "no"
     except (EOFError, KeyboardInterrupt):
-        return False
+        console.print("[red]no[/]")
+        return "no"
 
 
 # ── Agent loop ─────────────────────────────────────────────────────
 
 
-async def agent_loop(client: OllamaClient, messages: list, user_input: str) -> tuple[str, int]:
+async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan_mode: bool = False) -> tuple[str, int]:
     """Run the agentic tool-use loop. Returns (final_text, last_prompt_tokens)."""
     messages.append({"role": "user", "content": user_input})
     last_tokens = 0
+
+    system = SYSTEM_PROMPT + (PLAN_SYSTEM_ADDENDUM if plan_mode else "")
+    tools = PLAN_TOOLS if plan_mode else TOOL_DEFINITIONS
 
     for turn in range(MAX_TURNS):
         with console.status(
@@ -153,9 +243,9 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str) -> t
             spinner="dots",
         ):
             response = await client.chat(
-                system=SYSTEM_PROMPT,
+                system=system,
                 messages=messages,
-                tools=TOOL_DEFINITIONS,
+                tools=tools,
             )
 
         last_tokens = response.prompt_tokens
@@ -176,15 +266,43 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str) -> t
                     f"  [dim]>[/] [bold purple]{block.name}[/] {args_display}"
                 )
 
-                # Ask for confirmation on writes/edits/dangerous commands
-                confirm_desc = _needs_confirmation(block.name, block.input)
-                if confirm_desc and not await _confirm(confirm_desc):
-                    result = "User denied this action."
+                # Detect bash commands with trailing & — run via our tracker
+                cmd = block.input.get("command", "") if block.name == "bash" else ""
+                if block.name == "bash" and cmd.rstrip().endswith("&"):
+                    clean_cmd = cmd.rstrip().rstrip("&").strip()
+                    proc = subprocess.Popen(
+                        clean_cmd, shell=True,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        cwd=os.getcwd(),
+                    )
+                    _track_bg(proc, clean_cmd)
+                    result = f"Launched in background (PID {proc.pid})."
                 else:
-                    try:
-                        result = await execute_tool(block.name, block.input)
-                    except Exception as e:
-                        result = f"Tool error: {e}"
+                    # Ask for confirmation on writes/edits/dangerous/run commands
+                    confirm_info = _needs_confirmation(block.name, block.input)
+                    if confirm_info:
+                        desc, can_bg = confirm_info
+                        choice = await _confirm(desc, can_bg)
+                        if choice == "no":
+                            result = "User denied this action."
+                        elif choice == "bg":
+                            proc = subprocess.Popen(
+                                cmd, shell=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                cwd=os.getcwd(),
+                            )
+                            _track_bg(proc, cmd)
+                            result = f"Launched in background (PID {proc.pid})."
+                        else:
+                            try:
+                                result = await execute_tool(block.name, block.input)
+                            except Exception as e:
+                                result = f"Tool error: {e}"
+                    else:
+                        try:
+                            result = await execute_tool(block.name, block.input)
+                        except Exception as e:
+                            result = f"Tool error: {e}"
 
                 preview = result[:200] + "..." if len(result) > 200 else result
                 for line in preview.splitlines()[:5]:
@@ -254,6 +372,26 @@ def _show_help():
     console.print("  [green]exit[/], [green]quit[/], [green]q[/]  Exit the agent")
     console.print("  [green]Ctrl+C[/]          Cancel a running request")
     console.print()
+    console.print("[bold]Confirmations[/]")
+    console.print("  [green]y[/]               Approve and run")
+    console.print("  [green]b[/]               Approve and run in background [dim](servers, long tasks)[/]")
+    console.print("  [dim]any other key[/]    Deny")
+    console.print()
+    console.print("[bold]Shortcuts[/] [dim](bypass the LLM)[/]")
+    console.print("  [green]/ls[/] [dim][path][/]     List files in directory")
+    console.print("  [green]/pwd[/]             Show current working directory")
+    console.print("  [green]/cd[/] [dim]<path>[/]      Change working directory")
+    console.print("  [green]/cat[/] [dim]<file>[/]     Print file contents")
+    console.print("  [green]/model[/]           Show current model info")
+    console.print("  [green]/compact[/]         Force conversation compaction now")
+    console.print("  [green]/ps[/]              List background processes")
+    console.print("  [green]/kill[/] [dim]<pid>[/]     Kill a background process")
+    console.print()
+    console.print("[bold]Plan mode[/]")
+    console.print("  [green]Shift+Tab[/]        Toggle plan mode on/off")
+    console.print("  [green]/plan[/]            Enter plan mode [dim](explore, no writes)[/]")
+    console.print("  [green]/execute[/]         Exit plan mode, proceed with implementation")
+    console.print()
     console.print("[bold]Tools available[/]")
     console.print("  [purple]bash[/]            Run shell commands (git, tests, builds)")
     console.print("  [purple]read_file[/]       Read file contents with line numbers")
@@ -272,11 +410,104 @@ def _show_help():
     console.print()
 
 
+# ── Slash shortcuts ───────────────────────────────────────────────
+
+
+async def _handle_slash(user_input: str) -> bool:
+    """Handle slash commands. Returns True if handled."""
+    parts = user_input.split(None, 1)
+    cmd = parts[0].lower()
+    arg = parts[1] if len(parts) > 1 else ""
+
+    if cmd == "/ls":
+        path = arg or "."
+        import subprocess
+        result = subprocess.run(["ls", "-la", path], capture_output=True, text=True)
+        console.print(result.stdout or result.stderr)
+        return True
+
+    if cmd == "/pwd":
+        console.print(os.getcwd())
+        return True
+
+    if cmd == "/cd":
+        if not arg:
+            console.print("[red]Usage: /cd <path>[/]")
+        else:
+            try:
+                os.chdir(os.path.expanduser(arg))
+                console.print(f"[dim]{os.getcwd()}[/]")
+            except Exception as e:
+                console.print(f"[red]{e}[/]")
+        return True
+
+    if cmd == "/cat":
+        if not arg:
+            console.print("[red]Usage: /cat <file>[/]")
+        else:
+            try:
+                with open(os.path.expanduser(arg)) as f:
+                    console.print(f.read())
+            except Exception as e:
+                console.print(f"[red]{e}[/]")
+        return True
+
+    if cmd == "/model":
+        console.print(f"  Model:      [cyan]{MODEL}[/]")
+        console.print(f"  Context:    [cyan]{NUM_CTX:,}[/] tokens")
+        console.print(f"  Max output: [cyan]{MAX_TOKENS:,}[/] tokens")
+        console.print(f"  Max turns:  [cyan]{MAX_TURNS}[/]")
+        console.print(f"  Ollama:     [cyan]{OLLAMA_HOST}[/]")
+        return True
+
+    if cmd == "/compact":
+        return "compact"  # special signal handled in REPL loop
+
+    if cmd == "/ps":
+        _reap_bg()
+        if not _bg_processes:
+            console.print("[dim]No background processes.[/]")
+        else:
+            for p in _bg_processes:
+                elapsed = int(time.time() - p["started"])
+                mins, secs = divmod(elapsed, 60)
+                console.print(
+                    f"  PID [cyan]{p['pid']}[/]  "
+                    f"[dim]{mins}m{secs:02d}s[/]  {p['cmd']}"
+                )
+        return True
+
+    if cmd == "/kill":
+        if not arg:
+            console.print("[red]Usage: /kill <pid>[/]")
+        else:
+            try:
+                pid = int(arg)
+                target = next((p for p in _bg_processes if p["pid"] == pid), None)
+                if target:
+                    target["proc"].terminate()
+                    _bg_processes.remove(target)
+                    console.print(f"[dim]Killed PID {pid}[/]")
+                else:
+                    console.print(f"[red]PID {pid} not found in background processes[/]")
+            except ValueError:
+                console.print("[red]Usage: /kill <pid>[/]")
+        return True
+
+    if cmd == "/plan":
+        return "plan_on"
+
+    if cmd == "/execute":
+        return "plan_off"
+
+    return False  # not a known slash command — pass to LLM
+
+
 # ── REPL ───────────────────────────────────────────────────────────
 
 
 async def main():
-    global _active_task
+    global _active_task, _plan_mode
 
     loop = asyncio.get_running_loop()
     _install_signal_handlers(loop)
@@ -285,7 +516,7 @@ async def main():
         Panel(
             f"[bold]Qwen Coding Agent[/]\n"
             f"Model: [cyan]{MODEL}[/]  Ctx: [cyan]{NUM_CTX}[/]\n"
-            f"[dim]exit · clear · Ctrl+C to cancel[/]",
+            f"[dim]exit · clear · Ctrl+C to cancel · Shift+Tab for plan mode[/]",
             border_style="blue",
             width=40,
         )
@@ -303,31 +534,52 @@ async def main():
 
     history_path = os.path.expanduser("~/.qwen-agent-history")
 
-    yellow_style = Style.from_dict({
-        '': 'ansiyellow',
-    })
-    session = PromptSession(history=FileHistory(history_path), style=yellow_style)
+    yellow_style = Style.from_dict({'': 'ansiyellow'})
+
+    kb = KeyBindings()
+
+    @kb.add('s-tab')
+    def _toggle_plan(event):
+        global _plan_mode
+        _plan_mode = not _plan_mode
+        event.app.invalidate()
+
+    def _prompt_text():
+        if _plan_mode:
+            return "[PLAN] Human: "
+        return "Human: "
+
+    session = PromptSession(
+        history=FileHistory(history_path),
+        style=yellow_style,
+        key_bindings=kb,
+    )
 
     while True:
         try:
-            console.print(Rule(style="blue"))
-            user_input = await asyncio.to_thread(session.prompt, "Human: ", multiline=False)
-            console.print(Rule(style="blue"))
+            # Status line above the input
+            compact_in = max(0, COMPACT_THRESHOLD - len(messages))
+            bg = _bg_status()
+            plan_indicator = " · [bold green]PLAN MODE[/]" if _plan_mode else ""
+            if last_prompt_tokens > 0:
+                status = (
+                    f"[dim]ctx: {last_prompt_tokens:,} / {NUM_CTX:,} "
+                    f"· {len(messages)} msgs · compact in {compact_in}{bg}[/]{plan_indicator}"
+                )
+            else:
+                status = f"[dim]{len(messages)} msgs · compact in {compact_in}{bg}[/]{plan_indicator}"
+
+            console.print()
+            console.print(status)
+            console.print(Rule(style="dim cyan"))
+            user_input = await asyncio.to_thread(session.prompt, _prompt_text, multiline=False)
+            console.print(Rule(style="dim cyan"))
+            console.print()
         except EOFError:
             console.print("\n[dim]Bye![/]")
             break
         except KeyboardInterrupt:
             continue
-
-        # Token/message status line
-        compact_in = max(0, COMPACT_THRESHOLD - len(messages))
-        if last_prompt_tokens > 0:
-            console.print(
-                f"[dim]ctx: {last_prompt_tokens:,} / {NUM_CTX:,} tokens "
-                f"· {len(messages)} msgs · compact in {compact_in}[/]"
-            )
-        else:
-            console.print(f"[dim]{len(messages)} msgs · compact in {compact_in}[/]")
 
         user_input = user_input.strip()
         if not user_input:
@@ -344,12 +596,32 @@ async def main():
             _show_help()
             continue
 
+        # Slash shortcuts — bypass the LLM
+        if user_input.startswith("/"):
+            handled = await _handle_slash(user_input)
+            if handled == "compact":
+                if len(messages) < 4:
+                    console.print("[dim]Not enough history to compact.[/]")
+                else:
+                    messages[:] = await compact_history(client, messages, force=True)
+                continue
+            if handled == "plan_on":
+                _plan_mode = True
+                console.print("[bold green]Plan mode ON[/] — exploring only, no writes. Type /execute to proceed.")
+                continue
+            if handled == "plan_off":
+                _plan_mode = False
+                console.print("[dim]Plan mode OFF — back to normal.[/]")
+                continue
+            if handled:
+                continue
+
         # Run agent — Ctrl+C here cancels the task, not the app
         messages[:] = await compact_history(client, messages)
 
         _active_task = asyncio.current_task()
         try:
-            result, last_prompt_tokens = await agent_loop(client, messages, user_input)
+            result, last_prompt_tokens = await agent_loop(client, messages, user_input, plan_mode=_plan_mode)
             if result:
                 console.print()
                 console.print(Markdown(result))
