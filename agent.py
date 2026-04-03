@@ -76,7 +76,7 @@ def _bg_status() -> str:
 
 MODEL = os.environ.get("QWEN_MODEL", "qwen3.5:35b-a3b-nvfp4")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "16384"))
+NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "32768"))
 MAX_TOKENS = int(os.environ.get("QWEN_MAX_TOKENS", "8192"))
 MAX_TURNS = int(os.environ.get("QWEN_MAX_TURNS", "30"))
 COMPACT_THRESHOLD = int(os.environ.get("QWEN_COMPACT_THRESHOLD", "80"))
