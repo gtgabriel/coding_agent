@@ -180,21 +180,50 @@ async def write_file(path: str, content: str) -> str:
 
 async def edit_file(path: str, old_string: str, new_string: str) -> str:
     """Replace exact string in a file."""
+    import re
     try:
         path = os.path.expanduser(path)
         with open(path, "r") as f:
             content = f.read()
-        # Strip line numbers that read_file adds (e.g. "42\t" prefix on each line)
-        if old_string not in content:
-            import re
-            cleaned = re.sub(r"^\d+\t", "", old_string, flags=re.MULTILINE)
-            if cleaned != old_string and cleaned in content:
-                old_string = cleaned
-        if old_string not in content:
+
+        candidate = old_string
+
+        # Fix 1: Strip line numbers from read_file output (e.g. "42\t" prefix)
+        if candidate not in content:
+            stripped = re.sub(r"^\d+\t", "", candidate, flags=re.MULTILINE)
+            if stripped != candidate and stripped in content:
+                candidate = stripped
+
+        # Fix 2: Normalize trailing whitespace per line
+        if candidate not in content:
+            normalized = "\n".join(l.rstrip() for l in candidate.split("\n"))
+            if normalized in content:
+                candidate = normalized
+
+        # Fix 3: Tab/space mismatch — try both directions
+        if candidate not in content:
+            tab_to_spaces = candidate.replace("\t", "    ")
+            spaces_to_tab = re.sub(r"^(    )+", lambda m: "\t" * (len(m.group()) // 4), candidate, flags=re.MULTILINE)
+            if tab_to_spaces in content:
+                candidate = tab_to_spaces
+            elif spaces_to_tab in content:
+                candidate = spaces_to_tab
+
+        if candidate not in content:
+            # Show a hint: find the closest matching line to help the model
+            first_line = old_string.strip().split("\n")[0].strip()
+            hints = []
+            for i, line in enumerate(content.splitlines(), 1):
+                if first_line and first_line in line:
+                    hints.append(f"  line {i}: {line.rstrip()[:100]}")
+            hint_text = "\n".join(hints[:3])
+            if hint_text:
+                return f"Error: old_string not found (whitespace mismatch?). Similar lines in file:\n{hint_text}\nRead the file again to get exact content."
             return "Error: old_string not found. Read the file again to ensure exact match. Do NOT include line numbers from read_file output."
-        if content.count(old_string) > 1:
+
+        if content.count(candidate) > 1:
             return "Error: old_string is not unique. Provide more context."
-        new_content = content.replace(old_string, new_string, 1)
+        new_content = content.replace(candidate, new_string, 1)
         with open(path, "w") as f:
             f.write(new_content)
         return f"Edited {path} ({len(new_string.splitlines())} lines replaced)"
