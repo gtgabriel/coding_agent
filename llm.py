@@ -108,7 +108,8 @@ class OllamaClient:
         return result
 
     async def chat(self, system: str, messages: list, tools: list,
-                   on_thinking: callable = None, on_content: callable = None) -> LLMResponse:
+                   on_thinking: callable = None, on_content: callable = None,
+                   cancel_event=None) -> LLMResponse:
         """Send a streaming chat request to Ollama and return a normalized response.
 
         Callbacks (called from a background thread):
@@ -142,6 +143,10 @@ class OllamaClient:
             output_tokens = 0
 
             for raw_line in resp:
+                if cancel_event and cancel_event.is_set():
+                    resp.close()
+                    return {"cancelled": True}
+
                 line = raw_line.decode("utf-8").strip()
                 if not line:
                     continue
@@ -189,6 +194,10 @@ class OllamaClient:
             }
 
         result = await asyncio.to_thread(_do_stream, payload)
+
+        # Handle cancellation
+        if result.get("cancelled"):
+            return LLMResponse(stop_reason="end_turn", content=[])
 
         # Handle errors
         if "error" in result:

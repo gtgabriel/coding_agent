@@ -261,6 +261,8 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
 
     for turn in range(MAX_TURNS):
         # Streaming: show thinking snippets and content tokens live
+        import threading
+        cancel_event = threading.Event()
         status = console.status(
             f"[bold blue]Thinking... [dim]Ctrl+C to cancel[/][/]",
             spinner="dots",
@@ -282,18 +284,24 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
             console.file.write(token)
             console.file.flush()
 
-        response = await client.chat(
-            system=system,
-            messages=messages,
-            tools=tools,
-            on_thinking=_on_thinking,
-            on_content=_on_content,
-        )
+        try:
+            response = await client.chat(
+                system=system,
+                messages=messages,
+                tools=tools,
+                on_thinking=_on_thinking,
+                on_content=_on_content,
+                cancel_event=cancel_event,
+            )
+        except asyncio.CancelledError:
+            cancel_event.set()  # signal the background thread to stop
+            raise
+        finally:
+            status.stop()
 
         if streaming_content:
             console.file.write("\n")
             console.file.flush()
-        status.stop()
 
         last_tokens = response.prompt_tokens
 
