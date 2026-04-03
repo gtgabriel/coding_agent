@@ -161,7 +161,8 @@ async def write_file(path: str, content: str) -> str:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
             f.write(content)
-        return f"Wrote to {path}"
+        lines = content.count("\n") + 1
+        return f"Wrote {lines} lines to {path}"
     except Exception as e:
         return f"Error: {e}"
 
@@ -175,9 +176,10 @@ async def edit_file(path: str, old_string: str, new_string: str) -> str:
             return "Error: old_string not found. Read the file again to ensure exact match."
         if content.count(old_string) > 1:
             return "Error: old_string is not unique. Provide more context."
+        new_content = content.replace(old_string, new_string, 1)
         with open(path, "w") as f:
-            f.write(content.replace(old_string, new_string, 1))
-        return f"Edited {path}"
+            f.write(new_content)
+        return f"Edited {path} ({len(new_string.splitlines())} lines replaced)"
     except Exception as e:
         return f"Error: {e}"
 
