@@ -740,7 +740,8 @@ async def main():
             _cleanup_messages(messages, user_input)
             console.print("\n[yellow]Cancelled.[/]")
         except Exception as e:
-            console.print(f"\n[red]Error: {e}[/]")
+            from rich.text import Text
+            console.print(Text(f"\nError: {e}", style="red"))
         finally:
             _active_task = None
 
