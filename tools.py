@@ -63,7 +63,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "edit_file",
-        "description": "Replace an exact string in a file. You MUST read the file first. The old_string must match exactly.",
+        "description": "Replace an exact string in a file. You MUST read the file first. The old_string must match the file content exactly — do NOT include line numbers or tab prefixes from read_file output.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -184,8 +184,14 @@ async def edit_file(path: str, old_string: str, new_string: str) -> str:
         path = os.path.expanduser(path)
         with open(path, "r") as f:
             content = f.read()
+        # Strip line numbers that read_file adds (e.g. "42\t" prefix on each line)
         if old_string not in content:
-            return "Error: old_string not found. Read the file again to ensure exact match."
+            import re
+            cleaned = re.sub(r"^\d+\t", "", old_string, flags=re.MULTILINE)
+            if cleaned != old_string and cleaned in content:
+                old_string = cleaned
+        if old_string not in content:
+            return "Error: old_string not found. Read the file again to ensure exact match. Do NOT include line numbers from read_file output."
         if content.count(old_string) > 1:
             return "Error: old_string is not unique. Provide more context."
         new_content = content.replace(old_string, new_string, 1)
