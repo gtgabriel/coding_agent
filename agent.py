@@ -600,7 +600,7 @@ async def _model_picker(current: str) -> str | None:
     console.print("[bold]Installed models[/]")
     for i, name in enumerate(models, 1):
         marker = " [bold green]◀ current[/]" if name == current else ""
-        console.print(f"  [cyan]{i}[/]  {rich_escape(name)}{marker}")
+        console.print(f"  [cyan]{i}[/]  {rich_escape(name)}{marker}", highlight=False)
     console.print()
     console.print(f"  [dim]Enter number to switch, or press Enter to keep [cyan]{rich_escape(current)}[/][/]")
 
@@ -640,6 +640,7 @@ async def main():
             f"[dim]exit · clear · Ctrl+C to cancel · Shift+Tab for plan mode[/]",
             border_style="blue",
             width=80,
+            highlight=False,
         )
     )
 
@@ -687,7 +688,7 @@ async def main():
             status = f"[dim]{model_short} · turns {len(messages)}{ctx_part}{bg}[/]{plan_indicator}"
 
             console.print()
-            console.print(status)
+            console.print(status, highlight=False)
             console.print(Rule(style="dim cyan"))
             user_input = await asyncio.to_thread(session.prompt, _prompt_text, multiline=False)
             console.print(Rule(style="dim cyan"))
