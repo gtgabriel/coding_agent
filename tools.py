@@ -19,7 +19,7 @@ SSL_CTX.verify_mode = ssl.CERT_NONE
 # ── Configuration ──────────────────────────────────────────────────
 
 MAX_OUTPUT = 8000  # chars
-MODEL = os.environ.get("QWEN_MODEL", "qwen3.5:35b-a3b")
+MODEL = os.environ.get("QWEN_MODEL", "qwen3.5:35b-a3b-nvfp4")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
 
 # ── Tool definitions (Anthropic format) ───────────────────────────
