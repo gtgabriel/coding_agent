@@ -678,17 +678,11 @@ async def main():
     while True:
         try:
             # Status line above the input
-            compact_in = max(0, COMPACT_THRESHOLD - len(messages))
             bg = _bg_status()
             plan_indicator = " · [bold green]PLAN MODE[/]" if _plan_mode else ""
             model_short = MODEL.split(":")[0] if ":" in MODEL else MODEL
-            if last_prompt_tokens > 0:
-                status = (
-                    f"[dim]{model_short} · ctx: {last_prompt_tokens:,} / {NUM_CTX:,} "
-                    f"· {len(messages)} msgs · compact in {compact_in}{bg}[/]{plan_indicator}"
-                )
-            else:
-                status = f"[dim]{model_short} · {len(messages)} msgs · compact in {compact_in}{bg}[/]{plan_indicator}"
+            ctx_part = f" · ctx {last_prompt_tokens:,}/{NUM_CTX:,}" if last_prompt_tokens > 0 else ""
+            status = f"[dim]{model_short} · turns {len(messages)}/{COMPACT_THRESHOLD}{ctx_part}{bg}[/]{plan_indicator}"
 
             console.print()
             console.print(status)
@@ -725,6 +719,7 @@ async def main():
                     console.print("[dim]Not enough history to compact.[/]")
                 else:
                     messages[:] = await compact_history(client, messages, force=True)
+                    last_prompt_tokens = 0
                 continue
             if isinstance(handled, str) and handled.startswith("save:"):
                 filename = handled.split(":", 1)[1].strip()
@@ -766,7 +761,10 @@ async def main():
                 continue
 
         # Run agent — Ctrl+C here cancels the task, not the app
+        old_len = len(messages)
         messages[:] = await compact_history(client, messages)
+        if len(messages) < old_len:
+            last_prompt_tokens = 0
 
         _active_task = asyncio.current_task()
         try:
