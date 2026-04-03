@@ -260,26 +260,54 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
     tools = PLAN_TOOLS if plan_mode else TOOL_DEFINITIONS
 
     for turn in range(MAX_TURNS):
-        with console.status(
-            f"[bold blue]Thinking (turn {turn + 1})... [dim]Ctrl+C to cancel[/][/]",
+        # Streaming: show thinking snippets and content tokens live
+        status = console.status(
+            f"[bold blue]Thinking... [dim]Ctrl+C to cancel[/][/]",
             spinner="dots",
-        ):
-            response = await client.chat(
-                system=system,
-                messages=messages,
-                tools=tools,
-            )
+        )
+        status.start()
+        streaming_content = False
+
+        def _on_thinking(snippet):
+            # Truncate to fit nicely
+            s = snippet[:60].replace("[", "(").replace("]", ")")
+            status.update(f"[bold blue]Thinking:[/] [dim]{s}[/]")
+
+        def _on_content(token):
+            nonlocal streaming_content
+            if not streaming_content:
+                streaming_content = True
+                status.stop()
+                console.print()
+            console.file.write(token)
+            console.file.flush()
+
+        response = await client.chat(
+            system=system,
+            messages=messages,
+            tools=tools,
+            on_thinking=_on_thinking,
+            on_content=_on_content,
+        )
+
+        if streaming_content:
+            console.file.write("\n")
+            console.file.flush()
+        status.stop()
 
         last_tokens = response.prompt_tokens
 
         if response.stop_reason == "end_turn":
             text = "\n".join(b.text for b in response.content if isinstance(b, TextBlock))
             messages.append({"role": "assistant", "content": text})
+            # Don't re-print if we already streamed it
+            if streaming_content:
+                return "", last_tokens
             return text, last_tokens
 
         tool_results = []
         for block in response.content:
-            if isinstance(block, TextBlock) and block.text:
+            if isinstance(block, TextBlock) and block.text and not streaming_content:
                 console.print(Markdown(block.text))
 
             if isinstance(block, ToolUse):

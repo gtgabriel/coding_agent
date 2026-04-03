@@ -107,15 +107,21 @@ class OllamaClient:
 
         return result
 
-    async def chat(self, system: str, messages: list, tools: list) -> LLMResponse:
-        """Send a chat request to Ollama and return a normalized response."""
+    async def chat(self, system: str, messages: list, tools: list,
+                   on_thinking: callable = None, on_content: callable = None) -> LLMResponse:
+        """Send a streaming chat request to Ollama and return a normalized response.
+
+        Callbacks (called from a background thread):
+            on_thinking(snippet: str) — called periodically with thinking text
+            on_content(token: str)    — called for each content token
+        """
         ollama_messages = self._to_ollama_messages(system, messages)
         ollama_tools = self._to_ollama_tools(tools) if tools else []
 
         payload = {
             "model": self.model,
             "messages": ollama_messages,
-            "stream": False,
+            "stream": True,
             "options": {
                 "num_ctx": self.num_ctx,
                 "num_predict": self.max_tokens,
@@ -124,58 +130,107 @@ class OllamaClient:
         if ollama_tools:
             payload["tools"] = ollama_tools
 
-        def _do_request(p):
+        def _do_stream(p):
             body = json.dumps(p).encode()
             req = Request(f"{self.host}/api/chat", data=body, headers={"Content-Type": "application/json"})
-            with urlopen(req, timeout=300) as resp:
-                return json.loads(resp.read())
+            resp = urlopen(req, timeout=300)
 
-        data = await asyncio.to_thread(_do_request, payload)
+            thinking_buf = ""
+            content_buf = ""
+            tool_calls = []
+            prompt_tokens = 0
+            output_tokens = 0
 
-        if "error" in data:
-            err = data["error"]
-            # Retry without tools if model doesn't support them
-            if "does not support tools" in err and ollama_tools:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8").strip()
+                if not line:
+                    continue
+                chunk = json.loads(line)
+
+                if "error" in chunk:
+                    return {"error": chunk["error"], "tools_sent": bool(ollama_tools)}
+
+                msg = chunk.get("message", {})
+
+                # Thinking tokens
+                if msg.get("thinking"):
+                    thinking_buf += msg["thinking"]
+                    if on_thinking and len(thinking_buf) % 40 < len(msg["thinking"]):
+                        # Extract last meaningful phrase
+                        snippet = thinking_buf.rstrip().rsplit("\n", 1)[-1].strip()
+                        if len(snippet) > 80:
+                            snippet = snippet[-80:]
+                        if snippet:
+                            on_thinking(snippet)
+
+                # Content tokens
+                if msg.get("content"):
+                    content_buf += msg["content"]
+                    if on_content:
+                        on_content(msg["content"])
+
+                # Tool calls (arrive in final chunk)
+                if msg.get("tool_calls"):
+                    tool_calls = msg["tool_calls"]
+
+                # Final chunk
+                if chunk.get("done"):
+                    prompt_tokens = chunk.get("prompt_eval_count", 0)
+                    output_tokens = chunk.get("eval_count", 0)
+                    break
+
+            resp.close()
+            return {
+                "content": content_buf,
+                "thinking": thinking_buf,
+                "tool_calls": tool_calls,
+                "prompt_tokens": prompt_tokens,
+                "output_tokens": output_tokens,
+            }
+
+        result = await asyncio.to_thread(_do_stream, payload)
+
+        # Handle errors
+        if "error" in result:
+            err = result["error"]
+            if "does not support tools" in err and result.get("tools_sent"):
                 payload.pop("tools", None)
-                data = await asyncio.to_thread(_do_request, payload)
+                payload["stream"] = False
+                def _fallback(p):
+                    body = json.dumps(p).encode()
+                    req = Request(f"{self.host}/api/chat", data=body, headers={"Content-Type": "application/json"})
+                    with urlopen(req, timeout=300) as resp:
+                        return json.loads(resp.read())
+                data = await asyncio.to_thread(_fallback, payload)
                 if "error" not in data:
-                    # Fall through to normal response parsing below
-                    pass
-                else:
+                    text = (data.get("message", {}).get("content") or "").strip()
                     return LLMResponse(
                         stop_reason="end_turn",
-                        content=[TextBlock(text=f"Ollama error: {data['error']}")],
+                        content=[TextBlock(text=text)] if text else [],
+                        prompt_tokens=data.get("prompt_eval_count", 0),
+                        output_tokens=data.get("eval_count", 0),
                     )
-            else:
-                return LLMResponse(
-                    stop_reason="end_turn",
-                    content=[TextBlock(text=f"Ollama error: {err}")],
-                )
+                return LLMResponse(stop_reason="end_turn", content=[TextBlock(text=f"Ollama error: {data['error']}")])
+            return LLMResponse(stop_reason="end_turn", content=[TextBlock(text=f"Ollama error: {err}")])
 
-        msg = data.get("message", {})
+        # Build response
         content = []
-
         import re
-        # Ollama 0.20.0+ may separate thinking into its own field.
-        # If so, msg["content"] is already clean — just use it directly.
-        # If not, strip embedded thinking tags from content.
-        has_separate_thinking = "thinking" in msg
-        text = msg.get("content") or ""
 
-        if not has_separate_thinking:
-            # Qwen: <think>...</think>
+        text = result["content"]
+        if not result["thinking"]:
+            # Strip embedded thinking tags if Ollama didn't separate them
             text = re.sub(r"<think>[\s\S]*?</think>", "", text)
-            # Gemma 4: <|channel>...<channel|> (closed or unclosed)
             text = re.sub(r"<\|channel>[\s\S]*?<channel\|>", "", text)
-            text = re.sub(r"<\|channel>[\s\S]*", "", text)  # unclosed
-            text = re.sub(r"<channel\|>", "", text)  # stray closing tag
+            text = re.sub(r"<\|channel>[\s\S]*", "", text)
+            text = re.sub(r"<channel\|>", "", text)
 
         text = text.strip()
         if text:
             content.append(TextBlock(text=text))
 
-        if msg.get("tool_calls"):
-            for tc in msg["tool_calls"]:
+        if result["tool_calls"]:
+            for tc in result["tool_calls"]:
                 fn = tc["function"]
                 args = fn.get("arguments", {})
                 if isinstance(args, str):
@@ -189,10 +244,10 @@ class OllamaClient:
                     input=args,
                 ))
 
-        stop_reason = "tool_use" if msg.get("tool_calls") else "end_turn"
+        stop_reason = "tool_use" if result["tool_calls"] else "end_turn"
         return LLMResponse(
             stop_reason=stop_reason,
             content=content,
-            prompt_tokens=data.get("prompt_eval_count", 0),
-            output_tokens=data.get("eval_count", 0),
+            prompt_tokens=result["prompt_tokens"],
+            output_tokens=result["output_tokens"],
         )
