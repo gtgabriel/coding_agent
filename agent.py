@@ -10,6 +10,7 @@ import time
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape as rich_escape
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.syntax import Syntax
@@ -79,7 +80,7 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "32768"))
 MAX_TOKENS = int(os.environ.get("QWEN_MAX_TOKENS", "8192"))
 MAX_TURNS = int(os.environ.get("QWEN_MAX_TURNS", "50"))
-COMPACT_THRESHOLD = int(os.environ.get("QWEN_COMPACT_THRESHOLD", "80"))
+COMPACT_PCT = float(os.environ.get("QWEN_COMPACT_PCT", "0.85"))
 COMPACT_KEEP = int(os.environ.get("QWEN_COMPACT_KEEP", "6"))
 
 # ── Cancellation ──────────────────────────────────────────────────
@@ -100,9 +101,9 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop):
 # ── Compaction ─────────────────────────────────────────────────────
 
 
-async def compact_history(client: OllamaClient, messages: list, force: bool = False) -> list:
+async def compact_history(client: OllamaClient, messages: list, force: bool = False, ctx_used: int = 0) -> list:
     """Summarize older messages, keep recent ones intact. Returns new message list."""
-    if not force and len(messages) <= COMPACT_THRESHOLD:
+    if not force and (ctx_used / NUM_CTX) < COMPACT_PCT:
         return messages
 
     old = messages[:-COMPACT_KEEP]
@@ -467,7 +468,7 @@ def _show_help():
     console.print("  [purple]analyze_image[/]   Describe a screenshot or image")
     console.print()
     console.print("[bold]Configuration[/] [dim](env vars)[/]")
-    console.print(f"  QWEN_MODEL          [dim]{MODEL}[/]")
+    console.print(f"  QWEN_MODEL          [dim]{rich_escape(MODEL)}[/]")
     console.print(f"  QWEN_NUM_CTX        [dim]{NUM_CTX}[/]")
     console.print(f"  QWEN_MAX_TOKENS     [dim]{MAX_TOKENS}[/]")
     console.print(f"  QWEN_MAX_TURNS      [dim]{MAX_TURNS}[/]")
@@ -599,9 +600,9 @@ async def _model_picker(current: str) -> str | None:
     console.print("[bold]Installed models[/]")
     for i, name in enumerate(models, 1):
         marker = " [bold green]◀ current[/]" if name == current else ""
-        console.print(f"  [cyan]{i}[/]  {name}{marker}")
+        console.print(f"  [cyan]{i}[/]  {rich_escape(name)}{marker}")
     console.print()
-    console.print(f"  [dim]Enter number to switch, or press Enter to keep [cyan]{current}[/][/]")
+    console.print(f"  [dim]Enter number to switch, or press Enter to keep [cyan]{rich_escape(current)}[/][/]")
 
     try:
         choice = await asyncio.to_thread(input, "  > ")
@@ -635,10 +636,10 @@ async def main():
     console.print(
         Panel(
             f"[bold]Qwen Coding Agent[/]\n"
-            f"Model: [cyan]{MODEL}[/]  Ctx: [cyan]{NUM_CTX}[/]\n"
+            f"Model: [cyan]{rich_escape(MODEL)}[/]  Ctx: [cyan]{NUM_CTX}[/]\n"
             f"[dim]exit · clear · Ctrl+C to cancel · Shift+Tab for plan mode[/]",
             border_style="blue",
-            width=40,
+            width=80,
         )
     )
 
@@ -680,9 +681,10 @@ async def main():
             # Status line above the input
             bg = _bg_status()
             plan_indicator = " · [bold green]PLAN MODE[/]" if _plan_mode else ""
-            model_short = MODEL.split(":")[0] if ":" in MODEL else MODEL
-            ctx_part = f" · ctx {last_prompt_tokens:,}/{NUM_CTX:,}" if last_prompt_tokens > 0 else ""
-            status = f"[dim]{model_short} · turns {len(messages)}/{COMPACT_THRESHOLD}{ctx_part}{bg}[/]{plan_indicator}"
+            model_short = rich_escape(MODEL.split(":")[0] if ":" in MODEL else MODEL)
+            ctx_pct = f" ({last_prompt_tokens*100//NUM_CTX}%)" if last_prompt_tokens > 0 else ""
+            ctx_part = f" · ctx {last_prompt_tokens:,}/{NUM_CTX:,}{ctx_pct}" if last_prompt_tokens > 0 else ""
+            status = f"[dim]{model_short} · turns {len(messages)}{ctx_part}{bg}[/]{plan_indicator}"
 
             console.print()
             console.print(status)
@@ -755,14 +757,14 @@ async def main():
                 client.model = new_model
                 messages.clear()
                 last_prompt_tokens = 0
-                console.print(f"[bold green]Switched to [cyan]{new_model}[/]. Conversation cleared.[/]")
+                console.print(f"[bold green]Switched to [cyan]{rich_escape(new_model)}[/]. Conversation cleared.[/]")
                 continue
             if handled:
                 continue
 
         # Run agent — Ctrl+C here cancels the task, not the app
         old_len = len(messages)
-        messages[:] = await compact_history(client, messages)
+        messages[:] = await compact_history(client, messages, ctx_used=last_prompt_tokens)
         if len(messages) < old_len:
             last_prompt_tokens = 0
 
