@@ -87,6 +87,18 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "grep_file",
+        "description": "Search for a pattern in a file. Returns matching lines with line numbers. Use before read_file to find the right section.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path to search"},
+                "pattern": {"type": "string", "description": "Text or regex pattern to search for"},
+            },
+            "required": ["path", "pattern"],
+        },
+    },
+    {
         "name": "web_search",
         "description": "Search the web using DuckDuckGo. Returns top 5 results.",
         "input_schema": {
@@ -183,6 +195,23 @@ async def edit_file(path: str, old_string: str, new_string: str) -> str:
     except Exception as e:
         return f"Error: {e}"
 
+async def grep_file(path: str, pattern: str) -> str:
+    """Search for a pattern in a file, return matching lines with numbers."""
+    try:
+        path = os.path.expanduser(path)
+        with open(path, "r") as f:
+            lines = f.readlines()
+        matches = []
+        for i, line in enumerate(lines, 1):
+            if re.search(pattern, line):
+                matches.append(f"{i}\t{line.rstrip()}")
+        if not matches:
+            return f"No matches for '{pattern}' in {path}"
+        output = "\n".join(matches[:50])
+        return output[:MAX_OUTPUT]
+    except Exception as e:
+        return f"Error: {e}"
+
 async def list_files(pattern: str, path: str = None) -> str:
     """Find files matching a glob pattern."""
     try:
@@ -256,6 +285,7 @@ TOOL_HANDLERS = {
     "read_file": lambda args: read_file(args.get("path", ""), args.get("offset"), args.get("limit")),
     "write_file": lambda args: write_file(args.get("path", ""), args.get("content", "")),
     "edit_file": lambda args: edit_file(args.get("path", ""), args.get("old_string", ""), args.get("new_string", "")),
+    "grep_file": lambda args: grep_file(args.get("path", ""), args.get("pattern", "")),
     "list_files": lambda args: list_files(args.get("pattern", ""), args.get("path")),
     "web_search": lambda args: web_search(args.get("query", "")),
     "browse_url": lambda args: browse_url(args.get("url", "")),

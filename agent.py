@@ -410,6 +410,8 @@ def _format_tool_args(name: str, args: dict) -> str:
         return f"[cyan]{args.get('path', '')}[/]"
     if name == "edit_file":
         return f"[cyan]{args.get('path', '')}[/]"
+    if name == "grep_file":
+        return f"[cyan]{args.get('path', '')}[/] [dim]/{args.get('pattern', '')}/[/]"
     if name == "list_files":
         return f"[cyan]{args.get('pattern', '')}[/]"
     if name == "web_search":
