@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qwen Coding Agent — a terminal-based coding assistant powered by local Ollama."""
+"""Vaib Kodar — a terminal-based coding assistant powered by local Ollama."""
 
 import asyncio
 import os
@@ -75,7 +75,7 @@ def _bg_status() -> str:
 
 # ── Config ─────────────────────────────────────────────────────────
 
-MODEL = os.environ.get("QWEN_MODEL", "qwen3.5:35b-a3b-nvfp4")
+MODEL = os.environ.get("QWEN_MODEL", "gemma4:26b")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "32768"))
 MAX_TOKENS = int(os.environ.get("QWEN_MAX_TOKENS", "8192"))
@@ -270,10 +270,23 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
         )
         status.start()
         streaming_content = False
+        _think_buf = []  # accumulate thinking text
 
         def _on_thinking(snippet):
-            # Truncate to fit nicely
-            s = snippet[:60].replace("[", "(").replace("]", ")")
+            _think_buf.append(snippet)
+            full = "".join(_think_buf)
+            # Extract complete sentences: split on ". " followed by uppercase
+            import re
+            sentences = re.split(r'(?<=\. )(?=[A-Z])', full.replace("\n", " ").strip())
+            # Show last 2 complete sentences (skip the last fragment if no trailing period)
+            complete = [s.strip() for s in sentences if s.strip().endswith(".")]
+            if not complete:
+                # No complete sentence yet — show buffered text truncated
+                s = full[-80:].replace("[", "(").replace("]", ")")
+                status.update(f"[bold blue]Thinking:[/] [dim]{s}[/]")
+                return
+            display = complete[-2:] if len(complete) >= 2 else complete[-1:]
+            s = " ".join(display)[-120:].replace("[", "(").replace("]", ")")
             status.update(f"[bold blue]Thinking:[/] [dim]{s}[/]")
 
         def _on_content(token):
@@ -643,7 +656,7 @@ async def main():
 
     console.print(
         Panel(
-            f"[bold]Qwen Coding Agent[/]\n"
+            f"[bold]Vaib Kodar[/]\n"
             f"Model: [cyan]{rich_escape(MODEL)}[/]  Ctx: [cyan]{NUM_CTX}[/]\n"
             f"[dim]exit · clear · Ctrl+C to cancel · Shift+Tab for plan mode[/]",
             border_style="blue",
