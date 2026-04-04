@@ -383,6 +383,14 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
         messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results})
 
+        # Mid-loop compaction: if context is filling up, compact before next LLM call
+        if last_tokens > 0 and (last_tokens / NUM_CTX) >= COMPACT_PCT:
+            old_len = len(messages)
+            messages[:] = await compact_history(client, messages, ctx_used=last_tokens)
+            if len(messages) < old_len:
+                last_tokens = 0
+                console.print(f"  [dim yellow]Auto-compacted mid-loop ({old_len} → {len(messages)} messages)[/]")
+
     return "Error: max turns reached.", last_tokens
 
 
