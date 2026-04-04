@@ -209,6 +209,20 @@ async def edit_file(path: str, old_string: str, new_string: str) -> str:
             elif spaces_to_tab in content:
                 candidate = spaces_to_tab
 
+        # Fix 4: Fuzzy indent match — find the block by stripped content, use file's actual indentation
+        if candidate not in content:
+            candidate_lines = [l.rstrip() for l in candidate.split("\n")]
+            content_lines = content.split("\n")
+            stripped_candidate = [l.lstrip() for l in candidate_lines]
+            # Slide through file looking for a match on stripped content
+            for start in range(len(content_lines) - len(candidate_lines) + 1):
+                window = content_lines[start:start + len(candidate_lines)]
+                stripped_window = [l.lstrip() for l in window]
+                if stripped_window == stripped_candidate:
+                    # Found it — use the file's actual text
+                    candidate = "\n".join(window)
+                    break
+
         if candidate not in content:
             # Show a hint: find the closest matching line to help the model
             first_line = old_string.strip().split("\n")[0].strip()
