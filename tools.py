@@ -190,6 +190,17 @@ async def edit_file(path: str, old_string: str, new_string: str) -> str:
         if old_string == new_string:
             return "Error: old_string and new_string are identical. No change needed."
 
+        # Guard: truncated strings (model hit output limit mid-argument)
+        for label, s in [("old_string", old_string), ("new_string", new_string)]:
+            if s and len(s) > 50:
+                stripped = s.rstrip()
+                # Ends mid-word (letter/digit not followed by punctuation or newline)
+                if stripped and stripped[-1].isalnum() and not stripped.endswith(("true", "false", "null", "none", "None")):
+                    last_line = stripped.rsplit("\n", 1)[-1].rstrip()
+                    # Check if it looks like a cut-off line (not a complete statement)
+                    if not any(last_line.endswith(e) for e in ("}", ";", ")", "]", ">", ",", ":", "{", "(", "=", '"', "'")):
+                        return f"Error: {label} appears truncated (ends with: ...{stripped[-50:]!r}). Use a smaller edit scope — target fewer lines."
+
         # Guard: force re-read after 2 consecutive failures on same file
         if _edit_fail_count.get(path, 0) >= 2:
             _edit_fail_count[path] = 0

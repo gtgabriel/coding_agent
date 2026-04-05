@@ -361,7 +361,7 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                 console.print(
                     f"  [dim]>[/] [bold purple]{block.name}[/] {args_display}"
                 )
-                slog("tool_call", tool=block.name, args={k: str(v)[:300] for k, v in block.input.items()})
+                slog("tool_call", tool=block.name, args={k: str(v)[:1000] for k, v in block.input.items()})
 
                 # Detect bash commands with trailing & — run via our tracker
                 cmd = block.input.get("command", "") if block.name == "bash" else ""
