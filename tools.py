@@ -178,11 +178,23 @@ async def write_file(path: str, content: str) -> str:
     except Exception as e:
         return f"Error: {e}"
 
+_edit_fail_count: dict = {}  # track consecutive failures per file
+
 async def edit_file(path: str, old_string: str, new_string: str) -> str:
     """Replace exact string in a file."""
     import re
     try:
         path = os.path.expanduser(path)
+
+        # Guard: no-op edit
+        if old_string == new_string:
+            return "Error: old_string and new_string are identical. No change needed."
+
+        # Guard: force re-read after 2 consecutive failures on same file
+        if _edit_fail_count.get(path, 0) >= 2:
+            _edit_fail_count[path] = 0
+            return "Error: multiple edit failures on this file. You MUST read_file first to see the current content before trying again."
+
         with open(path, "r") as f:
             content = f.read()
 
@@ -232,7 +244,9 @@ async def edit_file(path: str, old_string: str, new_string: str) -> str:
                     hints.append(f"  line {i}: {line.rstrip()[:100]}")
             hint_text = "\n".join(hints[:3])
             if hint_text:
+                _edit_fail_count[path] = _edit_fail_count.get(path, 0) + 1
                 return f"Error: old_string not found (whitespace mismatch?). Similar lines in file:\n{hint_text}\nRead the file again to get exact content."
+            _edit_fail_count[path] = _edit_fail_count.get(path, 0) + 1
             return "Error: old_string not found. Read the file again to ensure exact match. Do NOT include line numbers from read_file output."
 
         if content.count(candidate) > 1:
@@ -240,6 +254,7 @@ async def edit_file(path: str, old_string: str, new_string: str) -> str:
         new_content = content.replace(candidate, new_string, 1)
         with open(path, "w") as f:
             f.write(new_content)
+        _edit_fail_count.pop(path, None)  # reset on success
         return f"Edited {path} ({len(new_string.splitlines())} lines replaced)"
     except Exception as e:
         return f"Error: {e}"
