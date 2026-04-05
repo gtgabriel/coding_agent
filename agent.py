@@ -303,9 +303,11 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
             if not lines:
                 return
             display = lines[-2:] if len(lines) >= 2 else lines[-1:]
+            # Cap each line to avoid terminal wrapping
+            display = [l[:60] + ("..." if len(l) > 60 else "") for l in display]
             s = " | ".join(display)
-            # Truncate and escape Rich markup
-            s = s[-120:].replace("[", "(").replace("]", ")")
+            # Escape Rich markup
+            s = s.replace("[", "(").replace("]", ")")
             status.update(f"[bold blue]Thinking:[/] [dim]{s}[/]")
 
         def _on_content(token):
