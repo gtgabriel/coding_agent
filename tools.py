@@ -136,6 +136,66 @@ TOOL_DEFINITIONS = [
 
 # ── Tool implementations ───────────────────────────────────────────
 
+_bash_error_history: list = []  # track recent errors for retry detection
+
+
+def _enrich_error(output: str) -> str:
+    """Extract file/line from stack traces and append a diagnostic hint."""
+    import re
+    # Match common patterns: "at file:///path:line:col", "/path/file.js:line", "File "path", line N"
+    matches = re.findall(
+        r'(?:at\s+.*?\(|at\s+)(?:file:///)?((?:/[^\s:)]+\.(?:js|ts|py|mjs|cjs))):(\d+)',
+        output
+    )
+    if not matches:
+        matches = re.findall(r'((?:/[^\s:]+\.(?:js|ts|py|mjs|cjs))):(\d+)', output)
+    if not matches:
+        matches = re.findall(r'File "([^"]+)", line (\d+)', output)
+
+    if matches:
+        # Get the first non-node-internal file
+        for fpath, line in matches:
+            if 'node:internal' not in fpath and 'node_modules' not in fpath:
+                try:
+                    line_num = int(line)
+                    with open(fpath, 'r') as f:
+                        lines = f.readlines()
+                    start = max(0, line_num - 3)
+                    end = min(len(lines), line_num + 3)
+                    context = "".join(f"  {i+1}\t{lines[i]}" for i in range(start, end))
+                    output += f"\n\n--- Diagnostic hint ---\nError in {fpath} at line {line_num}:\n{context}Read this file to understand the bug."
+                except Exception:
+                    output += f"\n\n--- Diagnostic hint ---\nError originated in {fpath} at line {line_num}. Read that file to diagnose."
+                break
+    return output
+
+
+def _check_retry_loop(output: str) -> str:
+    """Detect if we're seeing the same error repeatedly."""
+    # Extract error type/message (first line that looks like an error)
+    import re
+    error_sig = None
+    for line in output.splitlines():
+        if re.match(r'^\w*(Error|Exception)', line):
+            error_sig = line.strip()[:100]
+            break
+    if not error_sig:
+        return output
+
+    _bash_error_history.append(error_sig)
+    # Count consecutive same errors
+    count = 0
+    for prev in reversed(_bash_error_history):
+        if prev == error_sig:
+            count += 1
+        else:
+            break
+    if count >= 3:
+        output += f"\n\n--- RETRY WARNING ---\nYou have seen this same error {count} times. Your fix is NOT working. STOP and reconsider:\n1. Which FILE is actually causing the error? (check the stack trace)\n2. Have you been editing the wrong file?\n3. Read the originating file and look at the actual line that errors."
+        _bash_error_history.clear()
+    return output
+
+
 async def bash(command: str) -> str:
     """Execute a shell command."""
     try:
@@ -146,6 +206,12 @@ async def bash(command: str) -> str:
         output = result.stdout + result.stderr
         if not output:
             output = f"(exit code {result.returncode})"
+        # Enrich errors with file/line context and retry detection
+        if result.returncode != 0:
+            output = _enrich_error(output)
+            output = _check_retry_loop(output)
+        else:
+            _bash_error_history.clear()  # reset on success
         return output[:MAX_OUTPUT] + ("..." if len(output) > MAX_OUTPUT else "")
     except subprocess.TimeoutExpired:
         return "Error: command timed out (120s limit)"

@@ -271,6 +271,9 @@ async def _confirm(description: str, can_background: bool = False) -> str:
 # ── Agent loop ─────────────────────────────────────────────────────
 
 
+_session_changes: list = []  # track file modifications this session
+
+
 async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan_mode: bool = False) -> tuple[str, int]:
     """Run the agentic tool-use loop. Returns (final_text, last_prompt_tokens)."""
     slog("user_input", text=user_input[:500])
@@ -406,6 +409,17 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                 is_error = result.startswith("Error:")
                 slog("tool_result", tool=block.name, error=is_error, result=result[:500])
 
+                # Track file modifications for working memory
+                if not is_error and block.name in ("edit_file", "write_file"):
+                    fpath = block.input.get("path", "")
+                    desc = f"edited {fpath}" if block.name == "edit_file" else f"wrote {fpath}"
+                    _session_changes.append(desc)
+
+                # Append working memory to result so model knows what it's changed
+                change_note = ""
+                if _session_changes and block.name == "bash" and is_error:
+                    change_note = "\n\n--- Session changes so far ---\n" + "\n".join(f"  {i+1}. {c}" for i, c in enumerate(_session_changes[-10:]))
+
                 preview = result[:200] + "..." if len(result) > 200 else result
                 for line in preview.splitlines()[:5]:
                     console.print(Text(f"    {line}", style="dim"))
@@ -413,7 +427,7 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
-                    "content": result,
+                    "content": result + change_note,
                 })
 
         if not tool_results:
