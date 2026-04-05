@@ -298,18 +298,14 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
         def _on_thinking(snippet):
             _think_buf.append(snippet)
             full = "".join(_think_buf)
-            # Extract complete sentences: split on ". " followed by uppercase
-            import re
-            sentences = re.split(r'(?<=\. )(?=[A-Z])', full.replace("\n", " ").strip())
-            # Show last 2 complete sentences (skip the last fragment if no trailing period)
-            complete = [s.strip() for s in sentences if s.strip().endswith(".")]
-            if not complete:
-                # No complete sentence yet — show buffered text truncated
-                s = full[-80:].replace("[", "(").replace("]", ")")
-                status.update(f"[bold blue]Thinking:[/] [dim]{s}[/]")
+            # Show last 2 non-empty lines of thinking (works for both prose and bullet-point styles)
+            lines = [l.strip() for l in full.splitlines() if l.strip()]
+            if not lines:
                 return
-            display = complete[-2:] if len(complete) >= 2 else complete[-1:]
-            s = " ".join(display)[-120:].replace("[", "(").replace("]", ")")
+            display = lines[-2:] if len(lines) >= 2 else lines[-1:]
+            s = " | ".join(display)
+            # Truncate and escape Rich markup
+            s = s[-120:].replace("[", "(").replace("]", ")")
             status.update(f"[bold blue]Thinking:[/] [dim]{s}[/]")
 
         def _on_content(token):
