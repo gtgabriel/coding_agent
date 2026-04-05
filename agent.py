@@ -288,7 +288,7 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
         import threading, queue as _queue
         cancel_event = threading.Event()
         status = console.status(
-            f"[bold blue]Thinking... [dim]Ctrl+C to cancel[/][/]",
+            f"[bright_cyan]Thinking... [dim]Ctrl+C to cancel[/][/]",
             spinner="dots",
         )
         status.start()
@@ -309,6 +309,9 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
             """Drain queues and update UI from the async (main) thread."""
             nonlocal streaming_content
             think_buf = []
+            import time as _time
+            _start = _time.monotonic()
+            _last_token = _start
             while not _stream_done.is_set() or not _think_q.empty() or not _content_q.empty():
                 # Drain thinking queue
                 dirty = False
@@ -316,6 +319,7 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                     try:
                         think_buf.append(_think_q.get_nowait())
                         dirty = True
+                        _last_token = _time.monotonic()
                     except _queue.Empty:
                         break
                 if dirty:
@@ -326,7 +330,14 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                         display = [l[:60] + ("..." if len(l) > 60 else "") for l in display]
                         s = " | ".join(display)
                         s = s.replace("[", "(").replace("]", ")")
-                        status.update(f"[bold blue]Thinking:[/] [dim]{s}[/]")
+                        elapsed = int(_time.monotonic() - _start)
+                        status.update(f"[bright_cyan]Thinking ({elapsed}s):[/] [dim]{s}[/]")
+                elif not streaming_content:
+                    # No new tokens — show elapsed time so it doesn't look frozen
+                    elapsed = int(_time.monotonic() - _start)
+                    idle = _time.monotonic() - _last_token
+                    if idle > 2:
+                        status.update(f"[bright_cyan]Thinking ({elapsed}s)...[/]")
 
                 # Drain content queue
                 while not _content_q.empty():
