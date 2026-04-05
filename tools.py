@@ -236,11 +236,12 @@ async def edit_file(path: str, old_string: str, new_string: str) -> str:
         if candidate not in content:
             candidate_lines = [l.rstrip() for l in candidate.split("\n")]
             content_lines = content.split("\n")
-            stripped_candidate = [l.lstrip() for l in candidate_lines]
+            # Strip both leading AND trailing whitespace for comparison
+            stripped_candidate = [l.strip() for l in candidate_lines]
             # Slide through file looking for a match on stripped content
             for start in range(len(content_lines) - len(candidate_lines) + 1):
                 window = content_lines[start:start + len(candidate_lines)]
-                stripped_window = [l.lstrip() for l in window]
+                stripped_window = [l.strip() for l in window]
                 if stripped_window == stripped_candidate:
                     # Found it — use the file's actual text
                     candidate = "\n".join(window)
