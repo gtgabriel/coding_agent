@@ -123,6 +123,7 @@ class OllamaClient:
             "model": self.model,
             "messages": ollama_messages,
             "stream": True,
+            "think": True,
             "options": {
                 "num_ctx": self.num_ctx,
                 "num_predict": self.max_tokens,
