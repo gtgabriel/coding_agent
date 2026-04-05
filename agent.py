@@ -93,13 +93,13 @@ def _bg_status() -> str:
 
 # ── Config ─────────────────────────────────────────────────────────
 
-MODEL = os.environ.get("QWEN_MODEL", "gemma4:26b")
+MODEL = os.environ.get("VK_MODEL", "gemma4:26b")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "32768"))
-MAX_TOKENS = int(os.environ.get("QWEN_MAX_TOKENS", "8192"))
-MAX_TURNS = int(os.environ.get("QWEN_MAX_TURNS", "50"))
-COMPACT_PCT = float(os.environ.get("QWEN_COMPACT_PCT", "0.85"))
-COMPACT_KEEP = int(os.environ.get("QWEN_COMPACT_KEEP", "6"))
+NUM_CTX = int(os.environ.get("VK_NUM_CTX", "32768"))
+MAX_TOKENS = int(os.environ.get("VK_MAX_TOKENS", "8192"))
+MAX_TURNS = int(os.environ.get("VK_MAX_TURNS", "50"))
+COMPACT_PCT = float(os.environ.get("VK_COMPACT_PCT", "0.85"))
+COMPACT_KEEP = int(os.environ.get("VK_COMPACT_KEEP", "6"))
 
 # ── Cancellation ──────────────────────────────────────────────────
 
@@ -531,10 +531,10 @@ def _show_help():
     console.print("  [purple]analyze_image[/]   Describe a screenshot or image")
     console.print()
     console.print("[bold]Configuration[/] [dim](env vars)[/]")
-    console.print(f"  QWEN_MODEL          [dim]{rich_escape(MODEL)}[/]")
-    console.print(f"  QWEN_NUM_CTX        [dim]{NUM_CTX}[/]")
-    console.print(f"  QWEN_MAX_TOKENS     [dim]{MAX_TOKENS}[/]")
-    console.print(f"  QWEN_MAX_TURNS      [dim]{MAX_TURNS}[/]")
+    console.print(f"  VK_MODEL          [dim]{rich_escape(MODEL)}[/]")
+    console.print(f"  VK_NUM_CTX        [dim]{NUM_CTX}[/]")
+    console.print(f"  VK_MAX_TOKENS     [dim]{MAX_TOKENS}[/]")
+    console.print(f"  VK_MAX_TURNS      [dim]{MAX_TURNS}[/]")
     console.print()
 
 
@@ -691,8 +691,8 @@ async def main():
     _install_signal_handlers(loop)
     slog("session_start", model=MODEL, num_ctx=NUM_CTX, cwd=os.getcwd(), log_file=_log_path)
 
-    # Model picker on startup (skip if QWEN_MODEL env var is explicitly set)
-    if not os.environ.get("QWEN_MODEL"):
+    # Model picker on startup (skip if VK_MODEL env var is explicitly set)
+    if not os.environ.get("VK_MODEL"):
         chosen = await _model_picker(current=MODEL)
         if chosen:
             MODEL = chosen
