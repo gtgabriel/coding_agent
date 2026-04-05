@@ -2,11 +2,14 @@
 """Vaib Kodar — a terminal-based coding assistant powered by local Ollama."""
 
 import asyncio
+import json
+import logging
 import os
 import signal
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -23,6 +26,21 @@ from prompt_toolkit.styles import Style
 from llm import OllamaClient, TextBlock, ToolUse, LLMResponse
 from tools import TOOL_DEFINITIONS, execute_tool
 from prompts import SYSTEM_PROMPT
+
+# ── Session log ───────────────────────────────────────────────────
+
+LOG_DIR = os.path.expanduser("~/.vaib-kodar/logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+_log_path = os.path.join(LOG_DIR, f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl")
+_log_file = open(_log_path, "a")
+
+
+def slog(event: str, **data):
+    """Write a structured log entry."""
+    entry = {"ts": datetime.now().isoformat(), "event": event, **data}
+    _log_file.write(json.dumps(entry, default=str) + "\n")
+    _log_file.flush()
+
 
 # ── Plan mode ─────────────────────────────────────────────────────
 
@@ -149,6 +167,7 @@ async def compact_history(client: OllamaClient, messages: list, force: bool = Fa
         {"role": "assistant", "content": "Understood. I have context from our previous conversation. How can I help?"},
     ] + recent
 
+    slog("compaction", old_messages=len(old), kept=len(recent), summary_len=len(summary))
     console.print(f"  [dim]Compacted {len(old)} old messages into summary, kept {len(recent)} recent[/]")
     return compacted
 
@@ -254,6 +273,7 @@ async def _confirm(description: str, can_background: bool = False) -> str:
 
 async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan_mode: bool = False) -> tuple[str, int]:
     """Run the agentic tool-use loop. Returns (final_text, last_prompt_tokens)."""
+    slog("user_input", text=user_input[:500])
     messages.append({"role": "user", "content": user_input})
     last_tokens = 0
 
@@ -318,6 +338,10 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
             console.file.flush()
 
         last_tokens = response.prompt_tokens
+        slog("llm_response", turn=turn, stop_reason=response.stop_reason,
+             prompt_tokens=response.prompt_tokens,
+             content_blocks=len(response.content),
+             text_preview="\n".join(b.text[:200] for b in response.content if isinstance(b, TextBlock))[:400])
 
         if response.stop_reason == "end_turn":
             text = "\n".join(b.text for b in response.content if isinstance(b, TextBlock))
@@ -337,6 +361,7 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                 console.print(
                     f"  [dim]>[/] [bold purple]{block.name}[/] {args_display}"
                 )
+                slog("tool_call", tool=block.name, args={k: str(v)[:300] for k, v in block.input.items()})
 
                 # Detect bash commands with trailing & — run via our tracker
                 cmd = block.input.get("command", "") if block.name == "bash" else ""
@@ -377,6 +402,9 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                             result = await execute_tool(block.name, block.input)
                         except Exception as e:
                             result = f"Tool error: {e}"
+
+                is_error = result.startswith("Error:")
+                slog("tool_result", tool=block.name, error=is_error, result=result[:500])
 
                 preview = result[:200] + "..." if len(result) > 200 else result
                 for line in preview.splitlines()[:5]:
@@ -647,6 +675,7 @@ async def main():
 
     loop = asyncio.get_running_loop()
     _install_signal_handlers(loop)
+    slog("session_start", model=MODEL, num_ctx=NUM_CTX, cwd=os.getcwd(), log_file=_log_path)
 
     # Model picker on startup (skip if QWEN_MODEL env var is explicitly set)
     if not os.environ.get("QWEN_MODEL"):
@@ -658,7 +687,8 @@ async def main():
         Panel(
             f"[bold]Vaib Kodar[/]\n"
             f"Model: [cyan]{rich_escape(MODEL)}[/]  Ctx: [cyan]{NUM_CTX}[/]\n"
-            f"[dim]exit · clear · Ctrl+C to cancel · Shift+Tab for plan mode[/]",
+            f"[dim]exit · clear · Ctrl+C to cancel · Shift+Tab for plan mode[/]\n"
+            f"[dim]Log: {_log_path}[/]",
             border_style="blue",
             width=80,
             highlight=False,
