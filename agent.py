@@ -285,7 +285,7 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
 
     for turn in range(MAX_TURNS):
         # Streaming: show thinking snippets and content tokens live
-        import threading
+        import threading, queue as _queue
         cancel_event = threading.Event()
         status = console.status(
             f"[bold blue]Thinking... [dim]Ctrl+C to cancel[/][/]",
@@ -293,31 +293,57 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
         )
         status.start()
         streaming_content = False
-        _think_buf = []  # accumulate thinking text
+
+        # Decouple stream callbacks from UI — thread-safe queues
+        _think_q = _queue.SimpleQueue()   # thinking tokens from stream thread
+        _content_q = _queue.SimpleQueue() # content tokens from stream thread
+        _stream_done = threading.Event()
 
         def _on_thinking(snippet):
-            _think_buf.append(snippet)
-            full = "".join(_think_buf)
-            # Show last 2 non-empty lines of thinking (works for both prose and bullet-point styles)
-            lines = [l.strip() for l in full.splitlines() if l.strip()]
-            if not lines:
-                return
-            display = lines[-2:] if len(lines) >= 2 else lines[-1:]
-            # Cap each line to avoid terminal wrapping
-            display = [l[:60] + ("..." if len(l) > 60 else "") for l in display]
-            s = " | ".join(display)
-            # Escape Rich markup
-            s = s.replace("[", "(").replace("]", ")")
-            status.update(f"[bold blue]Thinking:[/] [dim]{s}[/]")
+            _think_q.put(snippet)
 
         def _on_content(token):
+            _content_q.put(token)
+
+        async def _ui_updater():
+            """Drain queues and update UI from the async (main) thread."""
             nonlocal streaming_content
-            if not streaming_content:
-                streaming_content = True
-                status.stop()
-                console.print()
-            console.file.write(token)
-            console.file.flush()
+            think_buf = []
+            while not _stream_done.is_set() or not _think_q.empty() or not _content_q.empty():
+                # Drain thinking queue
+                dirty = False
+                while not _think_q.empty():
+                    try:
+                        think_buf.append(_think_q.get_nowait())
+                        dirty = True
+                    except _queue.Empty:
+                        break
+                if dirty:
+                    full = "".join(think_buf)
+                    lines = [l.strip() for l in full.splitlines() if l.strip()]
+                    if lines:
+                        display = lines[-2:] if len(lines) >= 2 else lines[-1:]
+                        display = [l[:60] + ("..." if len(l) > 60 else "") for l in display]
+                        s = " | ".join(display)
+                        s = s.replace("[", "(").replace("]", ")")
+                        status.update(f"[bold blue]Thinking:[/] [dim]{s}[/]")
+
+                # Drain content queue
+                while not _content_q.empty():
+                    try:
+                        token = _content_q.get_nowait()
+                        if not streaming_content:
+                            streaming_content = True
+                            status.stop()
+                            console.print()
+                        console.file.write(token)
+                        console.file.flush()
+                    except _queue.Empty:
+                        break
+
+                await asyncio.sleep(0.05)  # ~20 fps UI updates
+
+        ui_task = asyncio.create_task(_ui_updater())
 
         try:
             response = await client.chat(
@@ -329,9 +355,11 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                 cancel_event=cancel_event,
             )
         except asyncio.CancelledError:
-            cancel_event.set()  # signal the background thread to stop
+            cancel_event.set()
             raise
         finally:
+            _stream_done.set()
+            await ui_task  # flush remaining tokens
             status.stop()
 
         if streaming_content:
