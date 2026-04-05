@@ -322,22 +322,22 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                         _last_token = _time.monotonic()
                     except _queue.Empty:
                         break
-                if dirty:
-                    full = "".join(think_buf)
-                    lines = [l.strip() for l in full.splitlines() if l.strip()]
-                    if lines:
-                        display = lines[-2:] if len(lines) >= 2 else lines[-1:]
-                        display = [l[:60] + ("..." if len(l) > 60 else "") for l in display]
-                        s = " | ".join(display)
-                        s = s.replace("[", "(").replace("]", ")")
-                        elapsed = int(_time.monotonic() - _start)
-                        status.update(f"[bright_cyan]Thinking ({elapsed}s):[/] [dim]{s}[/]")
-                elif not streaming_content:
-                    # No new tokens — show elapsed time so it doesn't look frozen
-                    elapsed = int(_time.monotonic() - _start)
+                if not dirty and think_buf and not streaming_content:
+                    # Thinking stopped — print summary and clear buffer
                     idle = _time.monotonic() - _last_token
-                    if idle > 2:
-                        status.update(f"[bright_cyan]Thinking ({elapsed}s)...[/]")
+                    if idle > 0.5:
+                        status.stop()
+                        full = "".join(think_buf)
+                        lines = [l.strip() for l in full.splitlines() if l.strip()]
+                        if lines:
+                            s = lines[-1][:80] + ("..." if len(lines[-1]) > 80 else "")
+                            s = s.replace("[", "(").replace("]", ")")
+                            elapsed = int(_last_token - _start)
+                            console.print(f"[bright_cyan]Thinking ({elapsed}s):[/] [dim]{s}[/]")
+                        think_buf.clear()
+                        _start = _time.monotonic()
+                        _last_token = _start
+                        status.start()
 
                 # Drain content queue
                 while not _content_q.empty():
