@@ -341,6 +341,7 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
         last_tokens = response.prompt_tokens
         slog("llm_response", turn=turn, stop_reason=response.stop_reason,
              prompt_tokens=response.prompt_tokens,
+             thinking_len=response.thinking_len,
              content_blocks=len(response.content),
              text_preview="\n".join(b.text[:200] for b in response.content if isinstance(b, TextBlock))[:400])
 

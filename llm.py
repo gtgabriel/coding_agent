@@ -26,6 +26,7 @@ class LLMResponse:
     content: list      # list of TextBlock and/or ToolUse
     prompt_tokens: int = 0   # tokens used by the prompt
     output_tokens: int = 0   # tokens generated in response
+    thinking_len: int = 0    # length of thinking text (0 = no thinking)
 
 
 class OllamaClient:
@@ -255,4 +256,5 @@ class OllamaClient:
             content=content,
             prompt_tokens=result["prompt_tokens"],
             output_tokens=result["output_tokens"],
+            thinking_len=len(result.get("thinking", "")),
         )
