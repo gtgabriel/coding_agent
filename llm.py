@@ -161,13 +161,8 @@ class OllamaClient:
                 # Thinking tokens
                 if msg.get("thinking"):
                     thinking_buf += msg["thinking"]
-                    if on_thinking and len(thinking_buf) % 40 < len(msg["thinking"]):
-                        # Extract last meaningful phrase
-                        snippet = thinking_buf.rstrip().rsplit("\n", 1)[-1].strip()
-                        if len(snippet) > 80:
-                            snippet = snippet[-80:]
-                        if snippet:
-                            on_thinking(snippet)
+                    if on_thinking:
+                        on_thinking(msg["thinking"])
 
                 # Content tokens
                 if msg.get("content"):
