@@ -66,7 +66,7 @@ Tested on Apple Silicon (M-series Macs). These models use quantisation formats o
 
 **Notes:**
 - Qwen 3.5 35B uses a Mixture-of-Experts (MoE) architecture — only ~3B parameters active per token, so it runs much faster than a dense 35B model despite the larger download.
-- Gemma 4 26B is a dense model with strong reasoning but can fall into reasoning loops on complex tasks. Works best with the thinking mode enabled.
+- Gemma 4 26B is also MoE — fast inference with strong reasoning capabilities.
 - All models support Ollama's native tool calling and thinking modes.
 - A Mac with 32GB+ unified memory is recommended for the 35B/26B models. The 9B model runs comfortably on 16GB.
 
