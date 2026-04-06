@@ -44,7 +44,6 @@ The agent tracks which files have been read and on which turn. If the model trie
 ### Safety Guards
 - **Write confirmation**: `write_file`, `edit_file`, and dangerous bash commands (`rm`, `sudo`, `git push`, etc.) require explicit `y/n` confirmation before executing.
 - **Denial handling**: If you deny an action, all remaining tool calls in that turn are skipped and the agent asks what you'd like to do instead.
-- **Stdin buffer flush**: Confirmation prompts drain any buffered keypresses before reading, preventing accidental approvals or denials.
 
 ### Context Management
 - **Adaptive compaction**: When the context window fills to 85%, older messages are summarized by the model and replaced with a compact summary, keeping recent messages intact.
