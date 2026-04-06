@@ -170,6 +170,12 @@ class OllamaClient:
                     content_buf += msg["content"]
                     if on_content:
                         on_content(msg["content"])
+                    # Safety: cut off runaway content (reasoning loops)
+                    if len(content_buf) > 4000 and "Actually" in content_buf[-200:]:
+                        resp.close()
+                        content_buf = content_buf[:content_buf.rfind("\n\n", 0, 2000) + 1] or content_buf[:2000]
+                        content_buf += "\n\n[Response truncated — reasoning loop detected]"
+                        break
 
                 # Tool calls (arrive in final chunk)
                 if msg.get("tool_calls"):

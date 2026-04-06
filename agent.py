@@ -37,9 +37,12 @@ _log_file = open(_log_path, "a")
 
 def slog(event: str, **data):
     """Write a structured log entry."""
-    entry = {"ts": datetime.now().isoformat(), "event": event, **data}
-    _log_file.write(json.dumps(entry, default=str) + "\n")
-    _log_file.flush()
+    try:
+        entry = {"ts": datetime.now().isoformat(), "event": event, **data}
+        _log_file.write(json.dumps(entry, default=str) + "\n")
+        _log_file.flush()
+    except Exception:
+        pass  # never let logging break the agent
 
 
 # ── Plan mode ─────────────────────────────────────────────────────
@@ -169,6 +172,9 @@ async def compact_history(client: OllamaClient, messages: list, force: bool = Fa
 
     slog("compaction", old_messages=len(old), kept=len(recent), summary_len=len(summary))
     console.print(f"  [dim]Compacted {len(old)} old messages into summary, kept {len(recent)} recent[/]")
+    # Clear file read tracking — old context is gone, model needs to re-read
+    _files_read.clear()
+    _files_edited.clear()
     return compacted
 
 
@@ -216,11 +222,14 @@ def _needs_confirmation(tool_name: str, args: dict) -> tuple[str, bool] | None:
 
 def _read_single_key() -> str:
     """Read a single keypress without waiting for Enter."""
-    import termios, tty
+    import termios, tty, select
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
+        # Flush any buffered input before reading
+        while select.select([fd], [], [], 0)[0]:
+            os.read(fd, 1024)
         return sys.stdin.read(1)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -272,6 +281,8 @@ async def _confirm(description: str, can_background: bool = False) -> str:
 
 
 _session_changes: list = []  # track file modifications this session
+_files_read: dict = {}   # path -> turn number when last read
+_files_edited: set = set()  # paths edited since last read
 
 
 async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan_mode: bool = False) -> tuple[str, int]:
@@ -393,16 +404,40 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
             return text, last_tokens
 
         tool_results = []
+        _user_denied = False
         for block in response.content:
             if isinstance(block, TextBlock) and block.text and not streaming_content:
                 console.print(Markdown(block.text))
 
             if isinstance(block, ToolUse):
+                # Skip remaining tool calls if user denied a previous one
+                if _user_denied:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": "Skipped — user denied a previous action in this turn.",
+                    })
+                    continue
                 args_display = _format_tool_args(block.name, block.input)
                 console.print(
                     f"  [dim]>[/] [bold purple]{block.name}[/] {args_display}"
                 )
                 slog("tool_call", tool=block.name, args={k: str(v)[:1000] for k, v in block.input.items()})
+
+                # Intercept redundant file reads
+                if block.name == "read_file":
+                    fpath = block.input.get("path", "")
+                    if fpath in _files_read and fpath not in _files_edited:
+                        prev_turn = _files_read[fpath]
+                        result = f"You already read this file on turn {prev_turn}. It has not been modified. Use the content from your conversation history — do not re-read."
+                        console.print(Text(f"    [skipped — already in context]", style="dim"))
+                        slog("tool_result", tool=block.name, error=False, result="skipped: already in context")
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
+                        continue
 
                 # Detect bash commands with trailing & — run via our tracker
                 cmd = block.input.get("command", "") if block.name == "bash" else ""
@@ -424,7 +459,8 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                             _preview_tool(block.name, block.input)
                         choice = await _confirm(desc, can_bg)
                         if choice == "no":
-                            result = "User denied this action."
+                            result = "User denied this action. STOP and ask the user what they'd like you to do instead. Do not continue with other tool calls."
+                            _user_denied = True
                         elif choice == "bg":
                             proc = subprocess.Popen(
                                 cmd, shell=True,
@@ -447,11 +483,16 @@ async def agent_loop(client: OllamaClient, messages: list, user_input: str, plan
                 is_error = result.startswith("Error:")
                 slog("tool_result", tool=block.name, error=is_error, result=result[:500])
 
-                # Track file modifications for working memory
-                if not is_error and block.name in ("edit_file", "write_file"):
+                # Track file reads and modifications
+                if not is_error:
                     fpath = block.input.get("path", "")
-                    desc = f"edited {fpath}" if block.name == "edit_file" else f"wrote {fpath}"
-                    _session_changes.append(desc)
+                    if block.name == "read_file" and fpath:
+                        _files_read[fpath] = turn
+                        _files_edited.discard(fpath)
+                    elif block.name in ("edit_file", "write_file") and fpath:
+                        _files_edited.add(fpath)
+                        desc = f"edited {fpath}" if block.name == "edit_file" else f"wrote {fpath}"
+                        _session_changes.append(desc)
 
                 # Append working memory to result so model knows what it's changed
                 change_note = ""
@@ -727,13 +768,13 @@ async def main():
 
     loop = asyncio.get_running_loop()
     _install_signal_handlers(loop)
-    slog("session_start", model=MODEL, num_ctx=NUM_CTX, cwd=os.getcwd(), log_file=_log_path)
-
     # Model picker on startup (skip if VK_MODEL env var is explicitly set)
     if not os.environ.get("VK_MODEL"):
         chosen = await _model_picker(current=MODEL)
         if chosen:
             MODEL = chosen
+
+    slog("session_start", model=MODEL, num_ctx=NUM_CTX, cwd=os.getcwd(), log_file=_log_path)
 
     console.print(
         Panel(
@@ -811,6 +852,8 @@ async def main():
         if user_input.lower() == "clear":
             messages.clear()
             last_prompt_tokens = 0
+            _files_read.clear()
+            _files_edited.clear()
             console.print("[dim]Conversation cleared.[/]")
             continue
         if user_input.lower() in ("help", "/help"):

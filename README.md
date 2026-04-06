@@ -1,6 +1,6 @@
-# Qwen Coding Agent
+# Vaib Kodar
 
-A terminal-based coding assistant powered by a local Qwen 3.5 35B model via Ollama. Zero API costs, fully private, runs entirely on your machine.
+A terminal-based coding agent powered by local LLMs via Ollama. Zero API costs, fully private, runs entirely on your machine.
 
 Built as a lightweight alternative to cloud-based coding agents — same core workflow (read, edit, run, iterate) without sending your code anywhere.
 
@@ -17,7 +17,7 @@ Human: find all TODO comments in the project and list them
 Found 2 TODO comments across the project.
 ```
 
-The agent can chain multiple tools per request — read a file, edit it, run tests, fix failures — up to 20 turns per interaction.
+The agent chains multiple tools per request — read a file, edit it, run tests, fix failures — up to 50 turns per interaction.
 
 ## Tools
 
@@ -28,17 +28,41 @@ The agent can chain multiple tools per request — read a file, edit it, run tes
 | `write_file` | Create or overwrite files |
 | `edit_file` | Surgical string replacement (must read first) |
 | `list_files` | Glob pattern file search |
+| `grep_file` | Search file contents for patterns |
 | `web_search` | DuckDuckGo search |
 | `browse_url` | Fetch and extract text from web pages |
 | `analyze_image` | Describe screenshots/images using vision |
 
+## Agent Features
+
+### Thinking Display
+The agent shows real-time thinking snippets as the model reasons through problems. A spinner displays during inference, and thinking summaries appear between tool calls with elapsed time.
+
+### File Read Deduplication
+The agent tracks which files have been read and on which turn. If the model tries to re-read an unmodified file, it returns a reminder that the content is already in the conversation context — saving tokens and time. Edits mark files as stale so the next read goes through. Tracking resets on conversation compaction or `clear`.
+
+### Safety Guards
+- **Write confirmation**: `write_file`, `edit_file`, and dangerous bash commands (`rm`, `sudo`, `git push`, etc.) require explicit `y/n` confirmation before executing.
+- **Denial handling**: If you deny an action, all remaining tool calls in that turn are skipped and the agent asks what you'd like to do instead.
+- **Stdin buffer flush**: Confirmation prompts drain any buffered keypresses before reading, preventing accidental approvals or denials.
+
+### Context Management
+- **Adaptive compaction**: When the context window fills to 85%, older messages are summarized by the model and replaced with a compact summary, keeping recent messages intact.
+- **Working memory**: The agent tracks file modifications across the session and surfaces them when relevant (e.g., after a bash error).
+- **Session logging**: Every session is logged to `~/.vaib-kodar/logs/` as JSONL with timestamps, tool calls, results, and thinking metrics.
+
+### Plan Mode
+Press `Shift+Tab` or type `/plan` to enter plan mode — the agent can explore and read files but cannot make any writes. Useful for understanding a codebase before committing to changes.
+
 ## Setup
 
-**Prerequisites:** Python 3.10+, [Ollama](https://ollama.com) with Qwen 3.5 35B pulled.
+**Prerequisites:** Python 3.10+, [Ollama](https://ollama.com) with a supported model pulled.
 
 ```bash
-# Pull the model (if you haven't already)
+# Pull a model
 ollama pull qwen3.5:35b-a3b
+# or
+ollama pull gemma4:26b
 
 # Clone and install
 git clone git@github.com:gtgabriel/coding_agent.git
@@ -59,21 +83,31 @@ cd /path/to/your/project
 Or add a shell alias to `~/.zshrc`:
 
 ```bash
-alias qwen_agent='PYTHONPATH="/path/to/coding_agent" /path/to/coding_agent/.venv/bin/python3 /path/to/coding_agent/agent.py'
+alias qa='/path/to/coding_agent/.venv/bin/python3 /path/to/coding_agent/agent.py'
 ```
 
 Then just:
 
 ```bash
 cd my-project
-qwen_agent
+qa
 ```
+
+On startup, a model picker shows installed Ollama models. Select one or press Enter to keep the default.
 
 ### Commands
 
-- `exit` / `quit` / `q` — leave the agent
-- `clear` — reset conversation history
-- `Ctrl+C` — cancel a running request (doesn't kill the app)
+| Command | Action |
+|---------|--------|
+| `exit` / `quit` / `q` | Leave the agent |
+| `clear` | Reset conversation history |
+| `help` / `/help` | Show help and configuration |
+| `/model` | Switch model mid-session |
+| `/model <name>` | Switch to a specific model |
+| `/compact` | Force conversation compaction |
+| `/save <file>` | Save last response to a file |
+| `/plan` | Toggle plan mode (read-only) |
+| `Ctrl+C` | Cancel a running request |
 
 ## Configuration
 
@@ -81,36 +115,41 @@ All settings via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `QWEN_MODEL` | `qwen3.5:35b-a3b` | Ollama model name |
+| `VK_MODEL` | `gemma4:26b` | Ollama model name (skips picker if set) |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL |
-| `QWEN_NUM_CTX` | `8192` | Context window size |
-| `QWEN_MAX_TOKENS` | `4096` | Max tokens per response |
-| `QWEN_MAX_TURNS` | `20` | Max tool-use turns per request |
-| `QWEN_COMPACT_THRESHOLD` | `20` | Messages before auto-compaction |
-| `QWEN_COMPACT_KEEP` | `6` | Recent messages kept during compaction |
+| `VK_NUM_CTX` | `32768` | Context window size |
+| `VK_MAX_TOKENS` | `8192` | Max tokens per response |
+| `VK_MAX_TURNS` | `50` | Max tool-use turns per request |
+| `VK_COMPACT_PCT` | `0.85` | Context usage % that triggers compaction |
+| `VK_COMPACT_KEEP` | `6` | Recent messages kept during compaction |
 
-Example with a different model:
+Example with a different model and context size:
 
 ```bash
-QWEN_MODEL=gemma3:27b qwen_agent
+VK_MODEL=qwen3.5:9b-nvfp4 VK_NUM_CTX=16384 qa
 ```
 
 ## Architecture
 
 ```
-agent.py      REPL loop + agent loop + tool confirmation
-llm.py        Ollama client (native /api/chat with tool calling)
-tools.py      8 tools — definitions + implementations
+agent.py      REPL loop, agent loop, tool confirmation, thinking display,
+              file read tracking, context compaction, session logging
+llm.py        Ollama client (streaming /api/chat with thinking tag parsing)
+tools.py      9 tools — definitions + implementations
 prompts.py    System prompt
 ```
 
-The agent loop follows the standard pattern: prompt model with tools → model returns tool calls → execute tools → feed results back → repeat until done.
+The agent loop follows the standard pattern: prompt model with tools → model returns tool calls → confirm if needed → execute tools → feed results back → repeat until done.
 
-Conversation history auto-compacts when it gets long — older messages are summarized by the model, recent ones kept intact.
+Conversation history auto-compacts when context fills up — older messages are summarized by the model, recent ones kept intact. File read tracking prevents redundant reads within a session.
 
-### Safety
+### Thinking Mode
 
-Write operations (`write_file`, `edit_file`) and dangerous bash commands (`rm`, `sudo`, `git push`, etc.) require explicit `y/N` confirmation before executing.
+The agent supports model thinking/reasoning via two paths:
+- **Native thinking channel**: When the model supports Ollama's `think: true` parameter, thinking tokens stream through a dedicated channel.
+- **Embedded tag parsing**: For models that embed thinking in `<think>...</think>` or `<|channel>...<channel|>` tags within content, the agent parses and extracts them automatically.
+
+Thinking summaries display between tool calls with elapsed time, providing visibility into the model's reasoning without cluttering the output.
 
 ## Dependencies
 
