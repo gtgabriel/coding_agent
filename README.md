@@ -38,8 +38,12 @@ The agent chains multiple tools per request — read a file, edit it, run tests,
 ### Thinking Display
 The agent shows real-time thinking snippets as the model reasons through problems. A spinner displays during inference, and thinking summaries appear between tool calls with elapsed time.
 
-### File Read Deduplication
-The agent tracks which files have been read and on which turn. If the model tries to re-read an unmodified file, it returns a reminder that the content is already in the conversation context — saving tokens and time. Edits mark files as stale so the next read goes through. Tracking resets on conversation compaction or `clear`.
+### In-Memory Notepad
+The agent maintains a lightweight working memory that tracks:
+- **Files read**: which files were read and on which turn — if the model tries to re-read an unmodified file, it gets a reminder that the content is already in context instead of wasting tokens on a duplicate read. Edits mark files as stale so the next read goes through.
+- **Session changes**: a running list of files created or modified during the session, surfaced to the model when relevant (e.g., after a failed command).
+
+Both reset on conversation compaction or `clear`.
 
 ### Safety Guards
 - **Write confirmation**: `write_file`, `edit_file`, and dangerous bash commands (`rm`, `sudo`, `git push`, etc.) require explicit `y/n` confirmation before executing.
