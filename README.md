@@ -54,15 +54,32 @@ The agent tracks which files have been read and on which turn. If the model trie
 ### Plan Mode
 Press `Shift+Tab` or type `/plan` to enter plan mode — the agent can explore and read files but cannot make any writes. Useful for understanding a codebase before committing to changes.
 
+## Recommended Models
+
+Tested on Apple Silicon (M-series Macs). These models use quantisation formats optimised for Metal/unified memory:
+
+| Model | Size | Best For | Pull Command |
+|-------|------|----------|-------------|
+| `qwen3.5:35b-a3b-nvfp4` | 21 GB | Best overall — strong tool use, thinking, editing | `ollama pull qwen3.5:35b-a3b-nvfp4` |
+| `gemma4:26b` | 17 GB | Good reasoning, fast inference, occasional thinking loops | `ollama pull gemma4:26b` |
+| `qwen3.5:9b-nvfp4` | 8.9 GB | Lightweight — fits 8GB+ machines, good for simple tasks | `ollama pull qwen3.5:9b-nvfp4` |
+
+**Notes:**
+- Qwen 3.5 35B uses a Mixture-of-Experts (MoE) architecture — only ~3B parameters active per token, so it runs much faster than a dense 35B model despite the larger download.
+- Gemma 4 26B is a dense model with strong reasoning but can fall into reasoning loops on complex tasks. Works best with the thinking mode enabled.
+- All models support Ollama's native tool calling and thinking modes.
+- A Mac with 32GB+ unified memory is recommended for the 35B/26B models. The 9B model runs comfortably on 16GB.
+
 ## Setup
 
 **Prerequisites:** Python 3.10+, [Ollama](https://ollama.com) with a supported model pulled.
 
 ```bash
-# Pull a model
-ollama pull qwen3.5:35b-a3b
-# or
+# Pull recommended model
+ollama pull qwen3.5:35b-a3b-nvfp4
+# or lighter alternatives
 ollama pull gemma4:26b
+ollama pull qwen3.5:9b-nvfp4
 
 # Clone and install
 git clone git@github.com:gtgabriel/coding_agent.git
